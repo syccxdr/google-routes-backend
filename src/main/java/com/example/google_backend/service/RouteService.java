@@ -30,4 +30,5 @@ public interface RouteService {
      */
     RouteResponse getRoutes(RouteRequest request) throws Exception;
 
+    List<RouteResponse.RouteDetail> sortRoutes(List<RouteResponse.RouteDetail> allRoutes, String sortType);
 }

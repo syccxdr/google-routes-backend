@@ -14,8 +14,10 @@ import org.springframework.web.client.RestTemplate;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 @Service
 public class RouteServiceImpl implements RouteService {
@@ -259,6 +261,38 @@ public class RouteServiceImpl implements RouteService {
         return response;
     }
 
+    @Override
+    public List<RouteResponse.RouteDetail> sortRoutes(List<RouteResponse.RouteDetail> allRoutes, String sortType) {
+
+        if (allRoutes == null || allRoutes.isEmpty()) {
+            throw new IllegalArgumentException("No routes to sort.");
+        }
+        switch (sortType) {
+            case "fewestTransfers":
+                return allRoutes.stream()
+                        .sorted(Comparator.comparingInt(route -> route.getLegs().size())) // 按换乘次数升序
+                        .collect(Collectors.toList());
+
+            case "lowestPrice":
+                //TODO: Implement sorting by price
+                return new ArrayList<>(allRoutes);
+
+            case "shortestDuration":
+                return allRoutes.stream()
+                        .sorted(Comparator.comparingLong(route -> parseDuration(route.getDuration()))) // 按时间升序
+                        .collect(Collectors.toList());
+
+            case "shortestDistance":
+                return allRoutes.stream()
+                        .sorted(Comparator.comparingInt(route -> Integer.parseInt(route.getDistanceMeters()))) // 按距离升序
+                        .collect(Collectors.toList());
+
+            default:
+                throw new IllegalArgumentException("Invalid sort type: " + sortType);
+        }
+
+    }
+
     /**
      * Parses the transit details from the JSON node.
      *
@@ -402,6 +436,9 @@ public class RouteServiceImpl implements RouteService {
 
         // Set Travel Mode
         payload.setTravelMode(request.getTravelMode());
+
+        // Set Compute Alternative Routes
+        payload.setComputeAlternativeRoutes(true);
 
         // Set Transit Preferences if Travel Mode is TRANSIT
         if ("TRANSIT".equalsIgnoreCase(request.getTravelMode()) && request.getTransitModes() != null && !request.getTransitModes().isEmpty()) {

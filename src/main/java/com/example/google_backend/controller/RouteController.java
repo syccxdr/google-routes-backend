@@ -5,10 +5,9 @@ import com.example.google_backend.model.RouteResponse;
 import com.example.google_backend.service.RouteService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 /**
  * Controller to handle route calculation requests.
@@ -34,6 +33,27 @@ public class RouteController {
         } catch (Exception e) {
             // Log the error and return an appropriate response
             return ResponseEntity.status(500).body("Error calculating routes: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/sorted")
+    public ResponseEntity<?> getSortedRoutes(
+            @RequestBody RouteRequest routeRequest,
+            @RequestParam(value = "sort", defaultValue = "shortestDuration") String sortType) {
+        try {
+            // Step 1: 获取所有路线
+            RouteResponse response = routeService.getRoutes(routeRequest);
+            List<RouteResponse.RouteDetail> allRoutes = response.getRoutes();
+
+            // Step 2: 按指定方式排序
+            List<RouteResponse.RouteDetail> sortedRoutes = routeService.sortRoutes(allRoutes, sortType);
+
+            // 返回排序后的路线
+            return ResponseEntity.ok(sortedRoutes);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body("Invalid sort type: " + sortType);
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body("Error sorting routes: " + e.getMessage());
         }
     }
 }
