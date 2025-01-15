@@ -84,13 +84,13 @@ public class RouteServiceImpl implements RouteService {
             String distanceMeters = routeNode.has("distanceMeters") && !routeNode.get("distanceMeters").isNull() ? routeNode.get("distanceMeters").asText() : "Unknown";
             String duration = routeNode.has("duration") && !routeNode.get("duration").isNull() ? routeNode.get("duration").asText() : "Unknown";
             String polyline = "No Polyline";
-
+            // Extract polyline if available
             if (routeNode.has("polyline") && !routeNode.get("polyline").isNull()
                     && routeNode.get("polyline").has("encodedPolyline")
                     && !routeNode.get("polyline").get("encodedPolyline").isNull()) {
                 polyline = routeNode.get("polyline").get("encodedPolyline").asText();
             }
-
+            // Initialize RouteDetail object
             RouteResponse.RouteDetail routeDetail = new RouteResponse.RouteDetail();
             routeDetail.setSummary(summary);
             routeDetail.setDistanceMeters(distanceMeters);
@@ -245,7 +245,6 @@ public class RouteServiceImpl implements RouteService {
                     }
                 }
             }
-
             routeDetail.setLegs(legs);
             routeDetails.add(routeDetail);
         }
