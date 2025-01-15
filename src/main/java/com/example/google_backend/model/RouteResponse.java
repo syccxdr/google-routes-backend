@@ -149,6 +149,7 @@ public class RouteResponse {
         private TransitDetails transitDetails;
         private int stopCount;
         private String polyline;
+        private String travelMode;
 
         // Constructors, Getters, and Setters
 
@@ -226,6 +227,12 @@ public class RouteResponse {
         public void setPolyline(String polyline) {
             this.polyline = polyline;
         }
+        public void setTravelMode(String polyline) {
+            this.travelMode=travelMode;
+        }
+        public String getTravelMode() {
+            return this.travelMode;
+        }
 
         // TransitDetails 类
         public static class TransitDetails {
@@ -282,6 +289,8 @@ public class RouteResponse {
             public static class StopDetails {
                 private Stop arrivalStop;
                 private Stop departureStop;
+                private String arrivalTime;
+                private String departureTime;
 
                 // Constructors, Getters, and Setters
 
@@ -307,12 +316,30 @@ public class RouteResponse {
 
                 public void setDepartureStop(Stop departureStop) {
                     this.departureStop = departureStop;
+
+                }
+
+                public String getArrivalTime() {
+                    return arrivalTime;
+                }
+
+                public void setArrivalTime(String arrivalTime) {
+                    this.arrivalTime = arrivalTime;
+                }
+
+                public String getDepartureTime() {
+                    return departureTime;
+                }
+
+                public void setDepartureTime(String departureTime) {
+                    this.departureTime = departureTime;
                 }
 
                 // Stop 类
                 public static class Stop {
                     private String name;
                     private String location;
+
 
                     // Constructors, Getters, and Setters
 
@@ -339,6 +366,10 @@ public class RouteResponse {
                     public void setLocation(String location) {
                         this.location = location;
                     }
+
+
+
+
                 }
             }
 
