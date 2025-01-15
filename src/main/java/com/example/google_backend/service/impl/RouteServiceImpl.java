@@ -29,14 +29,8 @@ public class RouteServiceImpl implements RouteService {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Logger logger = Logger.getLogger(RouteService.class.getName());
 
-    /**
-     * Retrieves routes based on the provided request.
-     *
-     * @param request The route calculation request.
-     * @return The route response containing route details.
-     * @throws Exception if an error occurs during API calls.
-     */
-    public RouteResponse getRoutes(RouteRequest request) throws Exception {
+
+    public JsonNode getResponse(RouteRequest request) throws Exception {
         // Step 1: Prepare the computeRoutes API request URL
         String computeRoutesUrl = "https://routes.googleapis.com/directions/v2:computeRoutes?key=" + googleApiKey;
 
@@ -69,20 +63,70 @@ public class RouteServiceImpl implements RouteService {
         logger.info("Time taken to fetch routes: " + timeElapsed + " ms");
 
         JsonNode computeRoutesResponse = responseEntity.getBody();
+        return computeRoutesResponse;
+    }
 
+    public RouteResponse.StepDetail setStepDetail(JsonNode stepNode){
+        RouteResponse.StepDetail stepDetail = new RouteResponse.StepDetail();
+
+        stepDetail.setInstruction(
+                stepNode.has("navigationInstruction")
+                        && stepNode.get("navigationInstruction").has("instructions")
+                        ? stepNode.get("navigationInstruction").get("instructions").asText()
+                        : "No Instruction"
+        );
+        stepDetail.setDistance(
+                stepNode.has("distanceMeters")
+                        ? stepNode.get("distanceMeters").asLong()
+                        : 0L
+        );
+        stepDetail.setDuration(
+                stepNode.has("staticDuration")
+                        ? parseDuration(stepNode.get("staticDuration").asText())
+                        : 0L
+        );
+        stepDetail.setPolyline(
+                stepNode.has("polyline") && !stepNode.get("polyline").isNull()
+                        && stepNode.get("polyline").has("encodedPolyline")
+                        ? stepNode.get("polyline").get("encodedPolyline").asText()
+                        : "No Polyline"
+        );
+        String stepTravelMode=stepNode.has("travelMode")
+                ? stepNode.get("travelMode").asText()
+                : "WALK";
+        stepDetail.setTravelMode(
+                stepTravelMode
+        );
+        return stepDetail;
+
+    }
+
+    public List<RouteResponse.StepDetail> changeStep(String startLoc, String endLoc) {
+        return new ArrayList<>();
+    }
+
+
+    /**
+     * Retrieves routes based on the provided request.
+     *
+     * @param request The route calculation request.
+     * @return The route response containing route details.
+     * @throws Exception if an error occurs during API calls.
+     */
+    public RouteResponse getRoutes(RouteRequest request) throws Exception {
+        JsonNode computeRoutesResponse = getResponse(request);
         if (computeRoutesResponse == null || !computeRoutesResponse.has("routes")) {
             throw new Exception("Unable to retrieve routes from Google Routes API.");
         }
 
-        // **新增日志记录：记录完整的 API 响应**
-//        logger.info("Compute Routes Response: " + objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(computeRoutesResponse));
-
-        // Parse route information
         List<RouteResponse.RouteDetail> routeDetails = new ArrayList<>();
         for (JsonNode routeNode : computeRoutesResponse.get("routes")) {
-            String summary = routeNode.has("summary") && !routeNode.get("summary").isNull() ? routeNode.get("summary").asText() : "No Summary";
-            String distanceMeters = routeNode.has("distanceMeters") && !routeNode.get("distanceMeters").isNull() ? routeNode.get("distanceMeters").asText() : "Unknown";
-            String duration = routeNode.has("duration") && !routeNode.get("duration").isNull() ? routeNode.get("duration").asText() : "Unknown";
+            String summary = routeNode.has("summary") && !routeNode.get("summary").isNull()
+                    ? routeNode.get("summary").asText() : "No Summary";
+            String distanceMeters = routeNode.has("distanceMeters") && !routeNode.get("distanceMeters").isNull()
+                    ? routeNode.get("distanceMeters").asText() : "Unknown";
+            String duration = routeNode.has("duration") && !routeNode.get("duration").isNull()
+                    ? routeNode.get("duration").asText() : "Unknown";
             String polyline = "No Polyline";
 
             if (routeNode.has("polyline") && !routeNode.get("polyline").isNull()
@@ -97,167 +141,145 @@ public class RouteServiceImpl implements RouteService {
             routeDetail.setDuration(duration);
             routeDetail.setPolyline(polyline);
 
-            // Initialize legs list
+            // 初始化 legs 容器
             List<RouteResponse.LegDetail> legs = new ArrayList<>();
 
-            // Check if stepsOverview exists to handle multi-modal segments
-            if (routeNode.has("stepsOverview") && !routeNode.get("stepsOverview").isNull()
-                    && routeNode.get("stepsOverview").has("multiModalSegments")) {
-                JsonNode multiModalSegments = routeNode.get("stepsOverview").get("multiModalSegments");
-                for (JsonNode segment : multiModalSegments) {
-                    String travelMode = segment.has("travelMode") && !segment.get("travelMode").isNull() ? segment.get("travelMode").asText() : "WALK";
-                    int stepStartIndex = segment.has("stepStartIndex") ? segment.get("stepStartIndex").asInt() : 0;
-                    int stepEndIndex = segment.has("stepEndIndex") ? segment.get("stepEndIndex").asInt() : 0;
-
+            if (routeNode.has("legs") && !routeNode.get("legs").isNull()) {
+                for (JsonNode legNode : routeNode.get("legs")) {
                     RouteResponse.LegDetail legDetail = new RouteResponse.LegDetail();
-                    legDetail.setTravelMode(travelMode);
-
-                    // Assume startLocation and endLocation based on first and last steps in the segment
-                    JsonNode steps = routeNode.get("steps");
-                    if (steps != null && steps.isArray()) {
-                        if (steps.size() > stepStartIndex) {
-                            JsonNode startStep = steps.get(stepStartIndex);
-                            if (startStep.has("startLocation") && !startStep.get("startLocation").isNull()) {
-                                legDetail.setStartLocation(startStep.get("startLocation").toString());
-                            } else {
-                                legDetail.setStartLocation("Unknown Start Location");
-                            }
-                        }
-
-                        if (steps.size() > stepEndIndex) {
-                            JsonNode endStep = steps.get(stepEndIndex);
-                            if (endStep.has("endLocation") && !endStep.get("endLocation").isNull()) {
-                                legDetail.setEndLocation(endStep.get("endLocation").toString());
-                            } else {
-                                legDetail.setEndLocation("Unknown End Location");
-                            }
-                        }
+                    // Extract start and end locations
+                    if (legNode.has("startLocation") && !legNode.get("startLocation").isNull()) {
+                        legDetail.setStartLocation(legNode.get("startLocation").toString());
                     } else {
                         legDetail.setStartLocation("Unknown Start Location");
+                    }
+                    if (legNode.has("endLocation") && !legNode.get("endLocation").isNull()) {
+                        legDetail.setEndLocation(legNode.get("endLocation").toString());
+                    } else {
                         legDetail.setEndLocation("Unknown End Location");
                     }
-
-                    // Extract distance and duration for the segment
-                    // Sum up distance and duration from individual steps
-                    long totalDistance = 0;
-                    long totalDuration = 0;
-                    List<RouteResponse.StepDetail> stepDetails = new ArrayList<>();
-
-                    for (int i = stepStartIndex; i <= stepEndIndex && i < routeNode.get("steps").size(); i++) {
-                        JsonNode stepNode = routeNode.get("steps").get(i);
-                        RouteResponse.StepDetail stepDetail = new RouteResponse.StepDetail();
-
-                        // Common step fields
-                        stepDetail.setInstruction(stepNode.has("navigationInstruction") && stepNode.get("navigationInstruction").has("instructions")
-                                ? stepNode.get("navigationInstruction").get("instructions").asText()
-                                : "No Instruction");
-                        stepDetail.setDistance(stepNode.has("distanceMeters") ? stepNode.get("distanceMeters").asLong() : 0L);
-                        stepDetail.setDuration(stepNode.has("staticDuration") ? parseDuration(stepNode.get("staticDuration").asText()) : 0L);
-                        stepDetail.setPolyline(stepNode.has("polyline") && !stepNode.get("polyline").isNull()
-                                && stepNode.get("polyline").has("encodedPolyline")
-                                ? stepNode.get("polyline").get("encodedPolyline").asText()
-                                : "No Polyline");
-
-                        // Additional fields based on travelMode
-                        if ("TRANSIT".equalsIgnoreCase(travelMode)) {
-                            if (stepNode.has("transitDetails") && !stepNode.get("transitDetails").isNull()) {
-                                // Extract transit-specific details
-                                JsonNode transitDetails = stepNode.get("transitDetails");
-                                stepDetail.setTransitDetails(parseTransitDetails(transitDetails));
-                            }
-                        }
-
-                        stepDetails.add(stepDetail);
-
-                        // Accumulate distance and duration
-                        totalDistance += stepDetail.getDistance();
-                        totalDuration += stepDetail.getDuration();
+                    // 如果 routeRequest 是 TRANSIT，就设置 travelMode=TRANSIT，否则按请求值
+                    if ("TRANSIT".equalsIgnoreCase(request.getTravelMode())) {
+                        legDetail.setTravelMode("TRANSIT");
+                    } else {
+                        legDetail.setTravelMode(request.getTravelMode());
                     }
 
-                    legDetail.setSteps(stepDetails);
-                    legDetail.setDistance(String.valueOf(totalDistance));
-                    legDetail.setDuration(String.valueOf(totalDuration));
+                    // distance/duration
+                    legDetail.setDistance(
+                            legNode.has("distanceMeters") && !legNode.get("distanceMeters").isNull()
+                                    ? legNode.get("distanceMeters").asText()
+                                    : "Unknown Distance"
+                    );
+                    legDetail.setDuration(
+                            legNode.has("duration") && !legNode.get("duration").isNull()
+                                    ? legNode.get("duration").asText()
+                                    : "Unknown Duration"
+                    );
 
-                    legs.add(legDetail);
-                }
-            } else {
-                // Fallback to handling steps without multi-modal segments
-                if (routeNode.has("legs") && !routeNode.get("legs").isNull()) {
-                    for (JsonNode legNode : routeNode.get("legs")) {
-                        RouteResponse.LegDetail legDetail = new RouteResponse.LegDetail();
+                    // 这里同理拆分 steps
+                    List<RouteResponse.StepDetail> steps = new ArrayList<>();
+                    boolean needReplacement = false;
 
-                        // Extract start and end locations
-                        if (legNode.has("startLocation") && !legNode.get("startLocation").isNull()) {
-                            legDetail.setStartLocation(legNode.get("startLocation").toString());
-                        } else {
-                            legDetail.setStartLocation("Unknown Start Location");
-                        }
+                    String previousTravelMode="WALK";
+                    long previousWalkDuration = 0;
+                    Instant curStepArrivalTime = Instant.now();
+                    Instant previousStepArrivalTime = Instant.now();
+                    if (legNode.has("steps") && !legNode.get("steps").isNull()) {
+                        for (int i = 0; i < legNode.get("steps").size(); i++) {
+                            JsonNode stepNode = legNode.get("steps").get(i);
+                            RouteResponse.StepDetail stepDetail = setStepDetail(stepNode);
+                            String stepTravelMode=stepNode.has("travelMode")
+                                    ? stepNode.get("travelMode").asText()
+                                    : "WALK";
+                            logger.info("stepTravelMode"+stepTravelMode+";"+"getDuration"+stepDetail.getDuration());
 
-                        if (legNode.has("endLocation") && !legNode.get("endLocation").isNull()) {
-                            legDetail.setEndLocation(legNode.get("endLocation").toString());
-                        } else {
-                            legDetail.setEndLocation("Unknown End Location");
-                        }
+                            if("WALK".equalsIgnoreCase(previousTravelMode) && "WALK".equalsIgnoreCase(stepTravelMode)) {
+                                previousWalkDuration+=stepDetail.getDuration();
+                            }
+                            if ("TRANSIT".equalsIgnoreCase(stepTravelMode)) {
+                                if (stepNode.has("transitDetails") && !stepNode.get("transitDetails").isNull()) {
+                                    JsonNode transitDetails = stepNode.get("transitDetails");
+                                    RouteResponse.StepDetail.TransitDetails td = parseTransitDetails(transitDetails);
+                                    if (td.getStopDetails() != null
+                                            && td.getStopDetails().getArrivalTime() != null) {
+                                        curStepArrivalTime = Instant.parse(td.getStopDetails().getArrivalTime());
+                                        logger.info("departureTime: " + td.getStopDetails().getArrivalTime());
+                                        logger.info("arrivalTime: " + td.getStopDetails().getDepartureTime());
+                                    }
+                                    if("WALK".equalsIgnoreCase(previousTravelMode)){
+                                        // ② 同样计算"等待时间"：前一个 step 的结束时间 + 走到站的duration => 当前 Bus 的 arrivalTime
+                                        if (td.getStopDetails() != null
+                                                && td.getStopDetails().getArrivalTime() != null) {
+                                            String departureTimeStr = td.getStopDetails().getDepartureTime();
+                                            try {
+                                                Instant departureTime = Instant.parse(departureTimeStr);
+                                                // 步行到这里的持续时间
+                                                long walkDuration = previousWalkDuration;
+                                                Instant walkToStationTime = previousStepArrivalTime
+                                                        .plusSeconds(walkDuration);
+                                                long waitTimeSeconds = Duration
+                                                        .between(walkToStationTime, departureTime).getSeconds();
+                                                logger.info("walkToStationTime:"+walkToStationTime+"=previousStepArrivalTime:"+previousStepArrivalTime+"+walkDuration:"+walkDuration);
+                                                logger.info("waitTimeSeconds:"+waitTimeSeconds+"=walkToStationTime:"+walkToStationTime+"-departureTime:"+departureTime);
+                                                if (waitTimeSeconds > 2) {
+                                                    String startLoc= td.getStopDetails().getDepartureStop().getLocation();
+                                                    String endLoc="";
+                                                    logger.info("等待时间"+waitTimeSeconds+"超过20min，重新调用Google Routes API, 切换本段step为Drive");
+                                                    logger.info("i:"+i);
+                                                    while("TRANSIT".equalsIgnoreCase(stepTravelMode) && i < legNode.get("steps").size()){
+                                                        stepNode = legNode.get("steps").get(i);
+                                                        stepDetail = setStepDetail(stepNode);
+                                                        stepTravelMode=stepNode.has("travelMode")
+                                                                ? stepNode.get("travelMode").asText()
+                                                                : "WALK";
+                                                        if (stepNode.has("transitDetails") && !stepNode.get("transitDetails").isNull()){
+                                                            JsonNode curtransitDetails = stepNode.get("transitDetails");
+                                                            RouteResponse.StepDetail.TransitDetails curtd = parseTransitDetails(curtransitDetails);
+                                                            stepDetail.setTransitDetails(curtd);
 
-                        // Extract distance and duration
-                        legDetail.setDistance(legNode.has("distanceMeters") && !legNode.get("distanceMeters").isNull()
-                                ? legNode.get("distanceMeters").asText()
-                                : "Unknown Distance");
-                        legDetail.setDuration(legNode.has("duration") && !legNode.get("duration").isNull()
-                                ? legNode.get("duration").asText()
-                                : "Unknown Duration");
+                                                            if (curtd.getStopDetails() != null) {
+                                                                endLoc = curtd.getStopDetails().getArrivalStop().getLocation();
+                                                            }
+                                                        }
+                                                        System.out.println("i:"+"start:"+startLoc+"end"+endLoc);
+                                                        i++;
 
-                        // Handle steps within the leg
-                        if (legNode.has("steps") && !legNode.get("steps").isNull()) {
-                            List<RouteResponse.StepDetail> steps = new ArrayList<>();
-                            for (JsonNode stepNode : legNode.get("steps")) {
-                                RouteResponse.StepDetail stepDetail = new RouteResponse.StepDetail();
-
-                                // Common step fields
-                                stepDetail.setInstruction(stepNode.has("navigationInstruction") && stepNode.get("navigationInstruction").has("instructions")
-                                        ? stepNode.get("navigationInstruction").get("instructions").asText()
-                                        : "No Instruction");
-                                stepDetail.setDistance(stepNode.has("distanceMeters") ? stepNode.get("distanceMeters").asLong() : 0L);
-                                stepDetail.setDuration(stepNode.has("staticDuration") ? parseDuration(stepNode.get("staticDuration").asText()) : 0L);
-                                stepDetail.setPolyline(stepNode.has("polyline") && !stepNode.get("polyline").isNull()
-                                        && stepNode.get("polyline").has("encodedPolyline")
-                                        ? stepNode.get("polyline").get("encodedPolyline").asText()
-                                        : "No Polyline");
-
-                                // Additional fields based on travelMode
-                                String stepTravelMode = stepNode.has("travelMode") ? stepNode.get("travelMode").asText() : "WALK";
-                                if ("TRANSIT".equalsIgnoreCase(stepTravelMode)) {
-                                    if (stepNode.has("transitDetails") && !stepNode.get("transitDetails").isNull()) {
-                                        // Extract transit-specific details
-                                        JsonNode transitDetails = stepNode.get("transitDetails");
-                                        stepDetail.setTransitDetails(parseTransitDetails(transitDetails));
+                                                    }
+                                                    logger.info("start: " + startLoc + " end: " + endLoc);
+                                                    // 调用 changeStep 获取 driving 步骤
+                                                    List<RouteResponse.StepDetail> changDetails = changeStep(startLoc, endLoc);
+                                                    steps.addAll(changDetails);
+                                                    needReplacement = true;
+                                                }
+                                            } catch (Exception e) {
+                                                System.out.println(e);
+                                            }
+                                        }
+                                    } else {
+                                        stepDetail.setTransitDetails(td);
                                     }
                                 }
-
-                                steps.add(stepDetail);
                             }
-                            legDetail.setSteps(steps);
-                        } else {
-                            legDetail.setSteps(new ArrayList<>()); // 设置为空列表
+                            previousStepArrivalTime = curStepArrivalTime;
+                            previousTravelMode = stepTravelMode;
+                            if(needReplacement == false){
+                                steps.add(stepDetail);
+                                System.out.println("i:"+i+"stepdetails"+stepTravelMode);
+                            }
+                            needReplacement = false;
                         }
-
-                        legs.add(legDetail);
                     }
+                    legDetail.setSteps(steps);
+                    legs.add(legDetail);
                 }
             }
-
             routeDetail.setLegs(legs);
             routeDetails.add(routeDetail);
         }
 
-        // **新增日志记录：记录获取所有路线所需的时间和获取的路线数量**
-        long totalTimeElapsed = Duration.between(startTime, endTime).toMillis(); // 计算总时间
-        logger.info("Total time taken to fetch all routes: " + totalTimeElapsed + " ms");
-        logger.info("Number of routes fetched: " + routeDetails.size());
-
         RouteResponse response = new RouteResponse();
         response.setRoutes(routeDetails);
-
         return response;
     }
 
