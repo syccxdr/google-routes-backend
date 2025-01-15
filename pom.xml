@@ -71,6 +71,14 @@
 			<artifactId>lombok</artifactId>
 			<scope>provided</scope>
 		</dependency>
+
+		<!-- https://mvnrepository.com/artifact/org.opentripplanner/otp-client -->
+		<dependency>
+			<groupId>org.opentripplanner</groupId>
+			<artifactId>otp-client</artifactId>
+			<version>0.1.7</version>
+		</dependency>
+
 	</dependencies>
 
 	<build>

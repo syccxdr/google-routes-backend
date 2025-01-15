@@ -2,10 +2,12 @@ package com.example.google_backend.service.impl;
 
 import com.example.google_backend.model.RouteRequest;
 import com.example.google_backend.model.RouteResponse;
+import com.example.google_backend.service.OTPService;
 import com.example.google_backend.service.RouteService;
 import com.example.google_backend.model.RouteRequestPayload;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
@@ -25,9 +27,12 @@ public class RouteServiceImpl implements RouteService {
     @Value("${google.api.key}")
     private String googleApiKey;
 
+
+    private OTPService otpService;
+
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final Logger logger = Logger.getLogger(RouteService.class.getName());
+    private final Logger logger = Logger.getLogger(RouteServiceImpl.class.getName());
 
 
     public JsonNode getResponse(RouteRequest request) throws Exception {
@@ -101,8 +106,8 @@ public class RouteServiceImpl implements RouteService {
 
     }
 
-    public List<RouteResponse.StepDetail> changeStep(String startLoc, String endLoc) {
-        return new ArrayList<>();
+    public List<RouteResponse.StepDetail> changeStep(String startLoc, String endLoc) throws Exception {
+        return otpService.getDrivingRoute(startLoc, endLoc);
     }
 
 
@@ -222,6 +227,7 @@ public class RouteServiceImpl implements RouteService {
                                                         .between(walkToStationTime, departureTime).getSeconds();
                                                 logger.info("walkToStationTime:"+walkToStationTime+"=previousStepArrivalTime:"+previousStepArrivalTime+"+walkDuration:"+walkDuration);
                                                 logger.info("waitTimeSeconds:"+waitTimeSeconds+"=walkToStationTime:"+walkToStationTime+"-departureTime:"+departureTime);
+                                                // 如果等待时间超过20min，就调用 changeStep 获取 driving 步骤
                                                 if (waitTimeSeconds > 2) {
                                                     String startLoc= td.getStopDetails().getDepartureStop().getLocation();
                                                     String endLoc="";
