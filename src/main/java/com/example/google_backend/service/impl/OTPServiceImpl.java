@@ -46,7 +46,7 @@ public class OTPServiceImpl implements OTPService {
                     .withModes(Set.of(RequestMode.CAR))
                     .build());
 
-            System.out.println("OTP Response: " + response);
+            System.out.println(" OTP response : " + response);
 
             // 转换结果为统一的StepDetail格式
             return convertToStepDetails(response);
@@ -96,7 +96,7 @@ public class OTPServiceImpl implements OTPService {
             leg.headsign().ifPresent(step::setHeadsign);
 
             // 设置路线指示
-            String instruction = String.format("From %s drive to %s",
+            String instruction = String.format("OTP result From %s drive to %s",
                     leg.from().name(),
                     leg.to().name());
             step.setInstruction(instruction);
