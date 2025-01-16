@@ -106,6 +106,7 @@ public class RouteServiceImpl implements RouteService {
 
     }
 
+    // 替换公交路径为OTP返回的驾驶路径
     public List<RouteResponse.StepDetail> changeStep(String startLoc, String endLoc) throws Exception {
         return otpService.getDrivingRoute(startLoc, endLoc);
     }
