@@ -5,8 +5,10 @@ import com.example.google_backend.model.RouteResponse;
 import com.example.google_backend.service.OTPService;
 import com.example.google_backend.service.RouteService;
 import com.example.google_backend.model.RouteRequestPayload;
+import com.example.google_backend.utils.TimingUtils;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.Resource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
@@ -27,7 +29,7 @@ public class RouteServiceImpl implements RouteService {
     @Value("${google.api.key}")
     private String googleApiKey;
 
-
+    @Resource
     private OTPService otpService;
 
     private final RestTemplate restTemplate = new RestTemplate();
@@ -107,8 +109,16 @@ public class RouteServiceImpl implements RouteService {
     }
 
     // 替换公交路径为OTP返回的驾驶路径
-    public List<RouteResponse.StepDetail> changeStep(String startLoc, String endLoc) throws Exception {
-        return otpService.getDrivingRoute(startLoc, endLoc);
+    public List<RouteResponse.StepDetail> changeStep(RouteResponse.StepDetail.TransitDetails.StopDetails.Stop startStop,
+                                                     RouteResponse.StepDetail.TransitDetails.StopDetails.Stop endStop) throws Exception {
+        return TimingUtils.measureExecutionTime("路径替换操作",
+                () -> {
+                    try {
+                        return otpService.getDrivingRoute(startStop, endStop);
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
     }
 
 
@@ -206,6 +216,8 @@ public class RouteServiceImpl implements RouteService {
                             if ("TRANSIT".equalsIgnoreCase(stepTravelMode)) {
                                 if (stepNode.has("transitDetails") && !stepNode.get("transitDetails").isNull()) {
                                     JsonNode transitDetails = stepNode.get("transitDetails");
+
+                                    //解析transitDetails
                                     RouteResponse.StepDetail.TransitDetails td = parseTransitDetails(transitDetails);
                                     if (td.getStopDetails() != null
                                             && td.getStopDetails().getArrivalTime() != null) {
@@ -229,10 +241,13 @@ public class RouteServiceImpl implements RouteService {
                                                 logger.info("walkToStationTime:"+walkToStationTime+"=previousStepArrivalTime:"+previousStepArrivalTime+"+walkDuration:"+walkDuration);
                                                 logger.info("waitTimeSeconds:"+waitTimeSeconds+"=walkToStationTime:"+walkToStationTime+"-departureTime:"+departureTime);
                                                 // 如果等待时间超过20min，就调用 changeStep 获取 driving 步骤
-                                                if (waitTimeSeconds > 2) {
+                                                if (waitTimeSeconds > 300) {
+                                                    // 获取当前 step 的起点和终点
                                                     String startLoc= td.getStopDetails().getDepartureStop().getLocation();
+                                                    RouteResponse.StepDetail.TransitDetails.StopDetails.Stop startStop = td.getStopDetails().getDepartureStop();
+                                                    RouteResponse.StepDetail.TransitDetails.StopDetails.Stop endStop = null;
                                                     String endLoc="";
-                                                    logger.info("等待时间"+waitTimeSeconds+"超过20min，重新调用Google Routes API, 切换本段step为Drive");
+                                                    logger.info("等待时间"+waitTimeSeconds+"超过20min，调用OTP API, 并切换本段step为Drive");
                                                     logger.info("i:"+i);
                                                     while("TRANSIT".equalsIgnoreCase(stepTravelMode) && i < legNode.get("steps").size()){
                                                         stepNode = legNode.get("steps").get(i);
@@ -247,6 +262,7 @@ public class RouteServiceImpl implements RouteService {
 
                                                             if (curtd.getStopDetails() != null) {
                                                                 endLoc = curtd.getStopDetails().getArrivalStop().getLocation();
+                                                                endStop = curtd.getStopDetails().getArrivalStop();
                                                             }
                                                         }
                                                         System.out.println("i:"+"start:"+startLoc+"end"+endLoc);
@@ -255,7 +271,7 @@ public class RouteServiceImpl implements RouteService {
                                                     }
                                                     logger.info("start: " + startLoc + " end: " + endLoc);
                                                     // 调用 changeStep 获取 driving 步骤
-                                                    List<RouteResponse.StepDetail> changDetails = changeStep(startLoc, endLoc);
+                                                    List<RouteResponse.StepDetail> changDetails = changeStep(startStop, endStop);
                                                     steps.addAll(changDetails);
                                                     needReplacement = true;
                                                 }
@@ -324,9 +340,8 @@ public class RouteServiceImpl implements RouteService {
 
     /**
      * Parses the transit details from the JSON node.
-     *
-     * @param transitDetailsNode The JSON node containing transit details.
-     * @return The populated TransitDetails object.
+     * 在此方法内也对 arrivalTime 做了读取，但只是存储和返回，不在此处做等待时间大于 180 秒的替换逻辑
+     * （可在创建 stepDetail 时进行更灵活的判断）
      */
     private RouteResponse.StepDetail.TransitDetails parseTransitDetails(JsonNode transitDetailsNode) {
         RouteResponse.StepDetail.TransitDetails transitDetails = new RouteResponse.StepDetail.TransitDetails();
@@ -339,6 +354,7 @@ public class RouteServiceImpl implements RouteService {
             if (stopDetailsNode.has("arrivalStop") && !stopDetailsNode.get("arrivalStop").isNull()) {
                 JsonNode arrivalStopNode = stopDetailsNode.get("arrivalStop");
                 RouteResponse.StepDetail.TransitDetails.StopDetails.Stop arrivalStop = new RouteResponse.StepDetail.TransitDetails.StopDetails.Stop();
+
                 arrivalStop.setName(arrivalStopNode.has("name") ? arrivalStopNode.get("name").asText() : "Unknown Arrival Stop");
                 if (arrivalStopNode.has("location") && !arrivalStopNode.get("location").isNull()) {
                     arrivalStop.setLocation(arrivalStopNode.get("location").toString());
@@ -347,17 +363,27 @@ public class RouteServiceImpl implements RouteService {
                 }
                 stopDetails.setArrivalStop(arrivalStop);
             }
+            // 把 arrivalTime 原样存储下来，后续在创建 StepDetail 时判断
+            if (stopDetailsNode.has("arrivalTime") && !stopDetailsNode.get("arrivalTime").isNull()) {
+                stopDetails.setArrivalTime(stopDetailsNode.get("arrivalTime").asText());
+            }
 
             if (stopDetailsNode.has("departureStop") && !stopDetailsNode.get("departureStop").isNull()) {
                 JsonNode departureStopNode = stopDetailsNode.get("departureStop");
                 RouteResponse.StepDetail.TransitDetails.StopDetails.Stop departureStop = new RouteResponse.StepDetail.TransitDetails.StopDetails.Stop();
+
                 departureStop.setName(departureStopNode.has("name") ? departureStopNode.get("name").asText() : "Unknown Departure Stop");
                 if (departureStopNode.has("location") && !departureStopNode.get("location").isNull()) {
                     departureStop.setLocation(departureStopNode.get("location").toString());
                 } else {
                     departureStop.setLocation("Unknown Location");
                 }
+
                 stopDetails.setDepartureStop(departureStop);
+            }
+
+            if (stopDetailsNode.has("departureTime") && !stopDetailsNode.get("departureTime").isNull()) {
+                stopDetails.setDepartureTime(stopDetailsNode.get("departureTime").asText());
             }
 
             transitDetails.setStopDetails(stopDetails);
@@ -377,7 +403,8 @@ public class RouteServiceImpl implements RouteService {
             if (transitLineNode.has("agencies") && transitLineNode.get("agencies").isArray()) {
                 List<RouteResponse.StepDetail.TransitDetails.TransitLine.Agency> agencies = new ArrayList<>();
                 for (JsonNode agencyNode : transitLineNode.get("agencies")) {
-                    RouteResponse.StepDetail.TransitDetails.TransitLine.Agency agency = new RouteResponse.StepDetail.TransitDetails.TransitLine.Agency();
+                    RouteResponse.StepDetail.TransitDetails.TransitLine.Agency agency =
+                            new RouteResponse.StepDetail.TransitDetails.TransitLine.Agency();
                     agency.setName(agencyNode.has("name") ? agencyNode.get("name").asText() : null);
                     agency.setPhoneNumber(agencyNode.has("phoneNumber") ? agencyNode.get("phoneNumber").asText() : null);
                     agency.setUri(agencyNode.has("uri") ? agencyNode.get("uri").asText() : null);
@@ -386,7 +413,6 @@ public class RouteServiceImpl implements RouteService {
                 transitLine.setAgencies(agencies);
             }
 
-            // Other transitLine fields
             transitLine.setName(transitLineNode.has("name") ? transitLineNode.get("name").asText() : null);
             transitLine.setColor(transitLineNode.has("color") ? transitLineNode.get("color").asText() : null);
             transitLine.setNameShort(transitLineNode.has("nameShort") ? transitLineNode.get("nameShort").asText() : null);
@@ -395,11 +421,15 @@ public class RouteServiceImpl implements RouteService {
             // Vehicle
             if (transitLineNode.has("vehicle") && !transitLineNode.get("vehicle").isNull()) {
                 JsonNode vehicleNode = transitLineNode.get("vehicle");
-                RouteResponse.StepDetail.TransitDetails.TransitLine.Vehicle vehicle = new RouteResponse.StepDetail.TransitDetails.TransitLine.Vehicle();
+                RouteResponse.StepDetail.TransitDetails.TransitLine.Vehicle vehicle =
+                        new RouteResponse.StepDetail.TransitDetails.TransitLine.Vehicle();
 
                 if (vehicleNode.has("name") && !vehicleNode.get("name").isNull()) {
-                    RouteResponse.StepDetail.TransitDetails.TransitLine.Vehicle.Name name = new RouteResponse.StepDetail.TransitDetails.TransitLine.Vehicle.Name();
-                    name.setText(vehicleNode.get("name").has("text") ? vehicleNode.get("name").get("text").asText() : null);
+                    RouteResponse.StepDetail.TransitDetails.TransitLine.Vehicle.Name name =
+                            new RouteResponse.StepDetail.TransitDetails.TransitLine.Vehicle.Name();
+                    name.setText(vehicleNode.get("name").has("text")
+                            ? vehicleNode.get("name").get("text").asText()
+                            : null);
                     vehicle.setName(name);
                 }
                 vehicle.setType(vehicleNode.has("type") ? vehicleNode.get("type").asText() : null);
@@ -415,11 +445,8 @@ public class RouteServiceImpl implements RouteService {
             transitDetails.setStopCount(transitDetailsNode.get("stopCount").asInt());
         }
 
-        // Parse localizedValues if needed (optional)
-
         return transitDetails;
     }
-
     /**
      * Parses duration string (e.g., "1581s") to seconds.
      *

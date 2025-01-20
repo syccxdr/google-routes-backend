@@ -1,10 +1,13 @@
 package com.example.google_backend.service.impl;
 
+import com.example.google_backend.model.RouteRequestPayload;
 import com.example.google_backend.model.RouteResponse;
 import com.example.google_backend.service.OTPService;
 import com.example.google_backend.service.RouteService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.leonard.Position;
+import org.locationtech.jts.geom.LineString;
 import org.opentripplanner.client.OtpApiClient;
 import org.opentripplanner.client.model.*;
 import org.opentripplanner.client.parameters.TripPlanParameters;
@@ -15,9 +18,11 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 @Service
 public class OTPServiceImpl implements OTPService {
@@ -32,11 +37,15 @@ public class OTPServiceImpl implements OTPService {
 
 
     @Override
-    public List<RouteResponse.StepDetail> getDrivingRoute(String startLoc, String endLoc) throws Exception {
+    public List<RouteResponse.StepDetail> getDrivingRoute(RouteResponse.StepDetail.TransitDetails.StopDetails.Stop startStop,
+                                                          RouteResponse.StepDetail.TransitDetails.StopDetails.Stop endStop) throws Exception {
 
-        // 解析起终点坐标
-        Coordinate origin = parseLocation(startLoc);
-        Coordinate destination = parseLocation(endLoc);
+        // 解析起终点坐标,提取名称
+        Coordinate origin = parseLocation(startStop.getLocation());
+        Coordinate destination = parseLocation(endStop.getLocation());
+        String startStopName = startStop.getName();
+        String endStopName = endStop.getName();
+
         try {
             // 发送请求
             var response = client.plan(TripPlanParameters.builder()
@@ -49,7 +58,7 @@ public class OTPServiceImpl implements OTPService {
             System.out.println(" OTP response : " + response);
 
             // 转换结果为统一的StepDetail格式
-            return convertToStepDetails(response);
+            return convertToStepDetails(response,startStopName,endStopName);
 
         } catch (Exception e) {
             throw new RuntimeException("Failed to get route from OTP", e);
@@ -72,7 +81,7 @@ public class OTPServiceImpl implements OTPService {
         }
     }
 
-    private List<RouteResponse.StepDetail> convertToStepDetails(TripPlan response) {
+    private List<RouteResponse.StepDetail> convertToStepDetails(TripPlan response, String startStopName, String endStopName) {
         List<RouteResponse.StepDetail> steps = new ArrayList<>();
 
         //检查响应是否为空
@@ -95,15 +104,35 @@ public class OTPServiceImpl implements OTPService {
             // 处理headsign - 如果为空就不设置或设置为null
             leg.headsign().ifPresent(step::setHeadsign);
 
-            // 设置路线指示
-            String instruction = String.format("OTP result From %s drive to %s",
-                    leg.from().name(),
-                    leg.to().name());
+            // 使用 toLinestring() 获取路线点
+            LineString lineString = leg.geometry().toLinestring();
+            org.locationtech.jts.geom.Coordinate[] coordinates = lineString.getCoordinates();
+
+            // 转换为 LatLng 列表
+            List<RouteRequestPayload.LatLng> pathPoints = Arrays.stream(coordinates)
+                    .map(coord -> new RouteRequestPayload.LatLng(
+                            coord.y,  // JTS中 y 代表纬度
+                            coord.x   // JTS中 x 代表经度
+                    ))
+                    .collect(Collectors.toList());
+
+
+            // 如果需要打印验证
+            System.out.println("路线总点数: " + pathPoints.size());
+//            pathPoints.forEach(point ->
+//                    System.out.printf("坐标点: (纬度:%.5f, 经度:%.5f)%n",
+//                            point.getLatitude(),
+//                            point.getLongitude())
+//            );
+
+            // 设置路线指示,使用google站点的名称代替OTP返回的经纬度
+            String instruction = String.format("OTP result: From %s drive to %s",
+                    startStopName,
+                    endStopName);
             step.setInstruction(instruction);
 
             //设置时间,返回为秒数
             step.setDuration(leg.duration().getSeconds());
-
 
             steps.add(step);
 

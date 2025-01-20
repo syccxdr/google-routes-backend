@@ -3,10 +3,12 @@ package com.example.google_backend.controller;
 import com.example.google_backend.model.RouteRequest;
 import com.example.google_backend.model.RouteResponse;
 import com.example.google_backend.service.RouteService;
+import com.example.google_backend.utils.TimingUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -27,8 +29,17 @@ public class RouteController {
      */
     @PostMapping("/calculate")
     public ResponseEntity<?> calculateRoutes(@RequestBody RouteRequest routeRequest) {
+
         try {
-            RouteResponse response = routeService.getRoutes(routeRequest);
+            // 记录路线计算服务的耗时
+            RouteResponse response = TimingUtils.measureExecutionTime("路线计算服务耗时",
+                    () -> {
+                        try {
+                            return routeService.getRoutes(routeRequest);
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
+                    });
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             // Log the error and return an appropriate response
