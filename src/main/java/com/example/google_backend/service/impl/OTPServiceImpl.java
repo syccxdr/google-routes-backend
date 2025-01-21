@@ -4,6 +4,7 @@ import com.example.google_backend.model.RouteRequestPayload;
 import com.example.google_backend.model.RouteResponse;
 import com.example.google_backend.service.OTPService;
 import com.example.google_backend.service.RouteService;
+import com.example.google_backend.utils.TimingUtils;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.leonard.Position;
@@ -58,7 +59,8 @@ public class OTPServiceImpl implements OTPService {
             System.out.println(" OTP response : " + response);
 
             // 转换结果为统一的StepDetail格式
-            return convertToStepDetails(response,startStopName,endStopName);
+            return TimingUtils.measureExecutionTime("转换OTP数据格式过程：",()->
+                    convertToStepDetails(response,startStopName,endStopName));
 
         } catch (Exception e) {
             throw new RuntimeException("Failed to get route from OTP", e);

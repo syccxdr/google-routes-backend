@@ -39,7 +39,7 @@ public class RouteServiceImpl implements RouteService {
 
     public JsonNode getResponse(RouteRequest request) throws Exception {
         // Step 1: Prepare the computeRoutes API request URL
-        String computeRoutesUrl = "https://routes.googleapis.com/directions/v2:computeRoutes?key=" + googleApiKey;
+        String computeRoutesUrl = "https://routes.googleapis.com/directions/v2:computeRoutes";
 
         // Step 2: Build the request payload as per Google Routes API specifications
         RouteRequestPayload payload = buildPayload(request);
@@ -51,6 +51,7 @@ public class RouteServiceImpl implements RouteService {
         // Set up HTTP headers
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("X-Goog-Api-Key", googleApiKey);
         headers.set("X-Goog-FieldMask", "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline,routes.legs");
 
         HttpEntity<String> entity = new HttpEntity<>(requestBody, headers);
@@ -241,7 +242,7 @@ public class RouteServiceImpl implements RouteService {
                                                 logger.info("walkToStationTime:"+walkToStationTime+"=previousStepArrivalTime:"+previousStepArrivalTime+"+walkDuration:"+walkDuration);
                                                 logger.info("waitTimeSeconds:"+waitTimeSeconds+"=walkToStationTime:"+walkToStationTime+"-departureTime:"+departureTime);
                                                 // 如果等待时间超过20min，就调用 changeStep 获取 driving 步骤
-                                                if (waitTimeSeconds > 300) {
+                                                if (waitTimeSeconds > 600) {
                                                     // 获取当前 step 的起点和终点
                                                     String startLoc= td.getStopDetails().getDepartureStop().getLocation();
                                                     RouteResponse.StepDetail.TransitDetails.StopDetails.Stop startStop = td.getStopDetails().getDepartureStop();
@@ -493,8 +494,8 @@ public class RouteServiceImpl implements RouteService {
         // Set Travel Mode
         payload.setTravelMode(request.getTravelMode());
 
-        // Set Compute Alternative Routes
-        payload.setComputeAlternativeRoutes(true);
+//        // Set Compute Alternative Routes
+//        payload.setComputeAlternativeRoutes(true);
 
         // Set Transit Preferences if Travel Mode is TRANSIT
         if ("TRANSIT".equalsIgnoreCase(request.getTravelMode()) && request.getTransitModes() != null && !request.getTransitModes().isEmpty()) {
