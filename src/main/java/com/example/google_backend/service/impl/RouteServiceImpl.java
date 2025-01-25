@@ -220,11 +220,12 @@ public class RouteServiceImpl implements RouteService {
 
                                     //解析transitDetails
                                     RouteResponse.StepDetail.TransitDetails td = parseTransitDetails(transitDetails);
+                                    stepDetail.setTransitDetails(td);
                                     if (td.getStopDetails() != null
                                             && td.getStopDetails().getArrivalTime() != null) {
                                         curStepArrivalTime = Instant.parse(td.getStopDetails().getArrivalTime());
-                                        logger.info("departureTime: " + td.getStopDetails().getArrivalTime());
-                                        logger.info("arrivalTime: " + td.getStopDetails().getDepartureTime());
+                                        logger.info("departureTime: " + td.getStopDetails().getDepartureTime());
+                                        logger.info("arrivalTime: " + td.getStopDetails().getArrivalTime());
                                     }
                                     if("WALK".equalsIgnoreCase(previousTravelMode)){
                                         // ② 同样计算"等待时间"：前一个 step 的结束时间 + 走到站的duration => 当前 Bus 的 arrivalTime
@@ -232,6 +233,7 @@ public class RouteServiceImpl implements RouteService {
                                                 && td.getStopDetails().getArrivalTime() != null) {
                                             String departureTimeStr = td.getStopDetails().getDepartureTime();
                                             try {
+                                                // 当前 step 的 departureTime
                                                 Instant departureTime = Instant.parse(departureTimeStr);
                                                 // 步行到这里的持续时间
                                                 long walkDuration = previousWalkDuration;
@@ -239,6 +241,10 @@ public class RouteServiceImpl implements RouteService {
                                                         .plusSeconds(walkDuration);
                                                 long waitTimeSeconds = Duration
                                                         .between(walkToStationTime, departureTime).getSeconds();
+                                                // 设置等待时间
+                                                td.setWaitTimeSeconds(waitTimeSeconds);
+                                                //再次确保更新后的 transitDetails 被设置
+                                                stepDetail.setTransitDetails(td);
                                                 logger.info("walkToStationTime:"+walkToStationTime+"=previousStepArrivalTime:"+previousStepArrivalTime+"+walkDuration:"+walkDuration);
                                                 logger.info("waitTimeSeconds:"+waitTimeSeconds+"=walkToStationTime:"+walkToStationTime+"-departureTime:"+departureTime);
                                                 // 如果等待时间超过20min，就调用 changeStep 获取 driving 步骤

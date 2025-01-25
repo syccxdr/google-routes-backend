@@ -57,7 +57,11 @@ public class RouteController {
             List<RouteResponse.RouteDetail> allRoutes = response.getRoutes();
 
             // Step 2: 按指定方式排序
-            List<RouteResponse.RouteDetail> sortedRoutes = routeService.sortRoutes(allRoutes, sortType);
+            // Step 2: 按指定方式排序
+            List<RouteResponse.RouteDetail> sortedRoutes = TimingUtils.measureExecutionTime(
+                    "路径排序耗时",
+                    () -> routeService.sortRoutes(allRoutes, sortType)
+            );
 
             // 返回排序后的路线
             return ResponseEntity.ok(sortedRoutes);

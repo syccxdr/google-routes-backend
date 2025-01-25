@@ -236,6 +236,7 @@ public class RouteResponse {
 
         // TransitDetails 类
         public static class TransitDetails {
+            private long waitTimeSeconds;
             private StopDetails stopDetails;
             private TransitLine transitLine;
             private String headsign;
@@ -246,11 +247,14 @@ public class RouteResponse {
             public TransitDetails() {
             }
 
-            public TransitDetails(StopDetails stopDetails, TransitLine transitLine, String headsign, int stopCount) {
+            public TransitDetails(StopDetails stopDetails, TransitLine transitLine, String headsign, int stopCount,
+                                  long waitTimeSeconds) {
                 this.stopDetails = stopDetails;
                 this.transitLine = transitLine;
                 this.headsign = headsign;
                 this.stopCount = stopCount;
+                this.waitTimeSeconds = waitTimeSeconds;
+
             }
 
             public StopDetails getStopDetails() {
@@ -283,6 +287,15 @@ public class RouteResponse {
 
             public void setStopCount(int stopCount) {
                 this.stopCount = stopCount;
+            }
+
+            // 新增的 getter 和 setter
+            public long getWaitTimeSeconds() {
+                return waitTimeSeconds;
+            }
+
+            public void setWaitTimeSeconds(long waitTimeSeconds) {
+                this.waitTimeSeconds = waitTimeSeconds;
             }
 
             // StopDetails 类
