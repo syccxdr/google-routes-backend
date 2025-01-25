@@ -248,7 +248,7 @@ public class RouteServiceImpl implements RouteService {
                                                 logger.info("walkToStationTime:"+walkToStationTime+"=previousStepArrivalTime:"+previousStepArrivalTime+"+walkDuration:"+walkDuration);
                                                 logger.info("waitTimeSeconds:"+waitTimeSeconds+"=walkToStationTime:"+walkToStationTime+"-departureTime:"+departureTime);
                                                 // 如果等待时间超过20min，就调用 changeStep 获取 driving 步骤
-                                                if (waitTimeSeconds > 600) {
+                                                if (waitTimeSeconds > 1800) {
                                                     // 获取当前 step 的起点和终点
                                                     String startLoc= td.getStopDetails().getDepartureStop().getLocation();
                                                     RouteResponse.StepDetail.TransitDetails.StopDetails.Stop startStop = td.getStopDetails().getDepartureStop();

@@ -3,13 +3,24 @@ package com.example.google_backend.service.impl;
 import com.example.google_backend.service.EtaService;
 import com.example.google_backend.utils.JsonUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
+import org.springframework.core.io.Resource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVRecord;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.Reader;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -29,18 +40,93 @@ public class EtaServiceImpl implements EtaService {
     //mtr railway url
     private static final String MTR_BASE_URL = "https://rt.data.gov.hk/v1/transport/mtr/getSchedule.php";
 
+    private final Map<String, Map<String, String>> stopNameToIdMap;
+
+    @Value("classpath:kmb_stops.csv")
+    private Resource kmbStopsResource;
+
+    @Value("classpath:cb_stops.csv")
+    private Resource cbStopsResource;
+
+    public EtaServiceImpl() {
+        this.stopNameToIdMap = new HashMap<>();
+        this.stopNameToIdMap.put("kmb", new HashMap<>());
+        this.stopNameToIdMap.put("ctb", new HashMap<>());
+    }
+
+    @PostConstruct
+    public void initializeStopMaps() {
+        loadKmbStops();
+        loadCbStops();
+    }
+
+    private void loadKmbStops() {
+        try (Reader reader = new InputStreamReader(kmbStopsResource.getInputStream());
+             CSVParser csvParser = CSVFormat.DEFAULT
+                     .builder()
+                     .setHeader()
+                     .setSkipHeaderRecord(true)
+                     .setQuote('"')
+                     .setTrim(true)
+                     .build()
+                     .parse(reader)) {
+
+            for (CSVRecord record : csvParser) {
+                if(record.size() >= 2) {  // 确保至少有 stop 和 name_en 两列
+                    String stopId = record.get(0);      // stop列
+                    String nameEn = record.get(1).trim();      // name_en列
+                    stopNameToIdMap.get("kmb").put(nameEn, stopId);
+                }            }
+        } catch (IOException e) {
+            logger.error("Error loading KMB stops", e);
+        }
+    }
+
+    private void loadCbStops() {
+        try (Reader reader = new InputStreamReader(cbStopsResource.getInputStream());
+             CSVParser csvParser = CSVFormat.DEFAULT
+                     .builder()
+                     .setHeader()
+                     .setSkipHeaderRecord(true)
+                     .build()
+                     .parse(reader)) {
+
+            for (CSVRecord record : csvParser) {
+                if (record.size() >= 3) {  // 确保有足够的列
+                    String stopId = record.get(0);    // 第一列
+                    String nameEn = record.get(2).trim();  // 第三列
+                    stopNameToIdMap.get("ctb").put(nameEn, stopId);
+                }
+            }
+        } catch (IOException e) {
+            logger.error("Error loading Citybus stops", e);
+        }
+    }
+
     @Override
-    public List<String> getBusEta(String stopId, String routeId, String company) {
+    public List<String> getBusEta(String stopName, String routeId, String company) {
         List<String> eta = new ArrayList<>();
+        String stopId = null;
 
         if ("kmb".equalsIgnoreCase(company)) {
-            eta = getKmbEta(stopId, routeId);
-            logger.info("KMB ETA requested for stop: {}" ,stopId);
-        } else if ("cb".equalsIgnoreCase(company)) {
-            eta = getCitybusEta(stopId, routeId);
-            logger.info("Citybus ETA requested for stop: {} and route: {}", stopId, routeId);
+            stopId = stopNameToIdMap.get("kmb").get(stopName);
+            if(stopId!=null){
+                eta = getKmbEta(stopId, routeId);
+                logger.info("KMB ETA requested for stop name: {}, stop ID: {}", stopName, stopId);
+            }else{
+                logger.warn("KMB stop not found for name: {}", stopName);
+            }
+        } else if ("ctb".equalsIgnoreCase(company)) {
+            stopId = stopNameToIdMap.get("ctb").get(stopName);
+            if (stopId != null) {
+                eta = getCitybusEta(stopId, routeId);
+                logger.info("Citybus ETA requested for stop name: {}, stop ID: {}, route: {}",
+                        stopName, stopId, routeId);
+            }else {
+                logger.warn("Citybus stop not found for name: {}", stopName);
+            }
         } else {
-            logger.info("Unknown company identifier: {}", company);
+            logger.warn("Unknown company identifier: {}", company);
         }
 
         logger.info("ETA results: {}", eta);
@@ -118,13 +204,15 @@ public class EtaServiceImpl implements EtaService {
                     for (Map<String, Object> data : dataArray) {
                         String eta = (String) data.get("eta");
                         String destTc = (String) data.get("dest_tc");
+                        Integer etaSeq = (Integer) data.get("eta_seq");
 
 
                         if (eta != null && !eta.isEmpty()) {
                             StringBuilder etaInfo = new StringBuilder();
-                            etaInfo.append("路线: ").append(routeId)
+                            etaInfo.append("城巴路线: ").append(routeId)
                                     .append(", 到站时间: ").append(eta)
-                                    .append(", 目的地: ").append(destTc);
+                                    .append(", 目的地: ").append(destTc)
+                                    .append(", 班次: ").append(etaSeq);
 
 
                             etaList.add(etaInfo.toString());

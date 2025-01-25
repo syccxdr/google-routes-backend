@@ -22,10 +22,10 @@ public class EtaController {
 
     @GetMapping("/bus")
     public ResponseEntity<?> getBusEta(
-            @RequestParam String stopId,
+            @RequestParam String stopName,
             @RequestParam String routeId,
             @RequestParam String company) {
-        List<String> etaList = etaService.getBusEta(stopId, routeId, company);
+        List<String> etaList = etaService.getBusEta(stopName, routeId, company);
         return ResponseEntity.ok(etaList);
     }
 

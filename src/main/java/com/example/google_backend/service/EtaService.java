@@ -12,5 +12,5 @@ public interface EtaService {
      * @param company The bus company.
      * @return A list of estimated times of arrival.
      */
-    List<String> getBusEta(String stopId, String routeId, String company);
+    List<String> getBusEta(String stopName, String routeId, String company);
 }

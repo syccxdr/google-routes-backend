@@ -67,6 +67,13 @@
 			<version>2.15.2</version>
 		</dependency>
 
+		<!-- 添加csv依赖 -->
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-csv</artifactId>
+			<version>1.10.0</version>
+		</dependency>
+
 
 		<!-- https://mvnrepository.com/artifact/org.opentripplanner/otp-client -->
 		<dependency>
