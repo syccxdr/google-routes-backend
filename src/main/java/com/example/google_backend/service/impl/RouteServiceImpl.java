@@ -109,6 +109,351 @@ public class RouteServiceImpl implements RouteService {
 
     }
 
+
+
+    /**
+     * Process route request and return route response
+     * Main responsibilities:
+     * 1. Call Google Routes API to get routing information
+     * 2. Parse response and build RouteResponse object
+     * 3. Process detailed route information including legs and steps
+     *
+     * @param request RouteRequest object containing origin, destination etc.
+     * @return RouteResponse object containing complete routing information
+     * @throws Exception when unable to retrieve route information
+     */
+    public RouteResponse getRoutes(RouteRequest request) throws Exception {
+        JsonNode computeRoutesResponse = getResponse(request);
+        if (computeRoutesResponse == null || !computeRoutesResponse.has("routes")) {
+            throw new Exception("Unable to retrieve routes from Google Routes API.");
+        }
+
+        List<RouteResponse.RouteDetail> routeDetails = new ArrayList<>();
+        for (JsonNode routeNode : computeRoutesResponse.get("routes")) {
+            RouteResponse.RouteDetail routeDetail = createRouteDetail(routeNode);
+            List<RouteResponse.LegDetail> legs = new ArrayList<>();
+
+            if (routeNode.has("legs") && !routeNode.get("legs").isNull()) {
+                for (JsonNode legNode : routeNode.get("legs")) {
+                    RouteResponse.LegDetail legDetail = createLegDetail(legNode, request);
+                    if (legNode.has("steps") && !legNode.get("steps").isNull()) {
+                        legDetail.setSteps(processSteps(legNode));
+                    }
+                    legs.add(legDetail);
+                }
+            }
+            routeDetail.setLegs(legs);
+            routeDetails.add(routeDetail);
+        }
+
+        RouteResponse response = new RouteResponse();
+        response.setRoutes(routeDetails);
+        return response;
+    }
+
+    /**
+     * Create route detail object from route node
+     * Extract and set basic route information including:
+     * - Summary
+     * - Distance
+     * - Duration
+     * - Polyline encoding
+     *
+     * @param routeNode JsonNode containing route information
+     * @return RouteResponse.RouteDetail object
+     */
+    private RouteResponse.RouteDetail createRouteDetail(JsonNode routeNode) {
+        String summary = routeNode.has("summary") && !routeNode.get("summary").isNull()
+                ? routeNode.get("summary").asText() : "No Summary";
+        String distanceMeters = routeNode.has("distanceMeters") && !routeNode.get("distanceMeters").isNull()
+                ? routeNode.get("distanceMeters").asText() : "Unknown";
+        String duration = routeNode.has("duration") && !routeNode.get("duration").isNull()
+                ? routeNode.get("duration").asText() : "Unknown";
+        String polyline = "No Polyline";
+
+        if (routeNode.has("polyline") && !routeNode.get("polyline").isNull()
+                && routeNode.get("polyline").has("encodedPolyline")
+                && !routeNode.get("polyline").get("encodedPolyline").isNull()) {
+            polyline = routeNode.get("polyline").get("encodedPolyline").asText();
+        }
+
+        RouteResponse.RouteDetail routeDetail = new RouteResponse.RouteDetail();
+        routeDetail.setSummary(summary);
+        routeDetail.setDistanceMeters(distanceMeters);
+        routeDetail.setDuration(duration);
+        routeDetail.setPolyline(polyline);
+        return routeDetail;
+    }
+
+    /**
+     * Create details for single leg
+     * Set basic leg properties including:
+     * - Start location
+     * - End location
+     * - Travel mode
+     * - Distance
+     * - Duration
+     *
+     * @param legNode JsonNode containing leg information
+     * @param request Original route request object
+     * @return RouteResponse.LegDetail object
+     */
+    private RouteResponse.LegDetail createLegDetail(JsonNode legNode, RouteRequest request) {
+        RouteResponse.LegDetail legDetail = new RouteResponse.LegDetail();
+
+        legDetail.setStartLocation(legNode.has("startLocation") && !legNode.get("startLocation").isNull()
+                ? legNode.get("startLocation").toString() : "Unknown Start Location");
+        legDetail.setEndLocation(legNode.has("endLocation") && !legNode.get("endLocation").isNull()
+                ? legNode.get("endLocation").toString() : "Unknown End Location");
+
+        legDetail.setTravelMode("TRANSIT".equalsIgnoreCase(request.getTravelMode())
+                ? "TRANSIT" : request.getTravelMode());
+
+        legDetail.setDistance(legNode.has("distanceMeters") && !legNode.get("distanceMeters").isNull()
+                ? legNode.get("distanceMeters").asText() : "Unknown Distance");
+        legDetail.setDuration(legNode.has("duration") && !legNode.get("duration").isNull()
+                ? legNode.get("duration").asText() : "Unknown Duration");
+
+        return legDetail;
+    }
+
+    /**
+     * Process all steps in a leg
+     * Main responsibilities:
+     * 1. Count number of transit steps
+     * 2. Choose processing strategy based on transit count
+     * 3. Apply different processing for high-frequency transfers vs normal cases
+     *
+     * @param legNode JsonNode containing steps information
+     * @return List<RouteResponse.StepDetail> processed list of steps
+     */
+    private List<RouteResponse.StepDetail> processSteps(JsonNode legNode) {
+        List<RouteResponse.StepDetail> steps = new ArrayList<>();
+        List<RouteResponse.StepDetail> transitSteps = new ArrayList<>();
+        int transitCount = 0;
+
+        // First pass: count transit steps and collect info
+        for (JsonNode stepNode : legNode.get("steps")) {
+            if (stepNode.has("travelMode") &&
+                    "TRANSIT".equalsIgnoreCase(stepNode.get("travelMode").asText())) {
+                transitCount++;
+                if (stepNode.has("transitDetails") && !stepNode.get("transitDetails").isNull()) {
+                    RouteResponse.StepDetail stepDetail = setStepDetail(stepNode);
+                    stepDetail.setTransitDetails(parseTransitDetails(stepNode.get("transitDetails")));
+                    transitSteps.add(stepDetail);
+                }
+            }
+        }
+
+        // Choose processing strategy based on transit count
+        if (transitCount > 5) {
+            return processHighTransitSteps(legNode, transitSteps);
+        } else {
+            return processNormalSteps(legNode);
+        }
+    }
+
+    /**
+     * Process steps for high-frequency transfer cases (when a leg contains 5 or more transfers)
+     * Optimization strategy:
+     * 1. Sort transit steps by transfer time
+     * 2. Keep 2-3 steps with the shortest transfer times
+     * 3. Retain all walking steps and selected transit steps
+     *
+     * @param legNode JsonNode containing steps information
+     * @param transitSteps List of collected transit steps
+     * @return List<RouteResponse.StepDetail> optimized list of steps
+     */
+    private List<RouteResponse.StepDetail> processHighTransitSteps(JsonNode legNode,
+                                                                   List<RouteResponse.StepDetail> transitSteps) {
+        List<RouteResponse.StepDetail> steps = new ArrayList<>();
+
+        // Sort by transfer time
+        transitSteps.sort((s1, s2) -> {
+            long time1 = getTransferTime(s1);
+            long time2 = getTransferTime(s2);
+            return Long.compare(time1, time2);
+        });
+
+        // Keep 2-3 steps with the shortest transfer times
+        List<RouteResponse.StepDetail> keptSteps = transitSteps.subList(
+                0,
+                Math.min(3, transitSteps.size())
+        );
+
+        // Re-traverse steps, keeping non-transit steps and selected transit steps
+        for (JsonNode stepNode : legNode.get("steps")) {
+            String stepTravelMode = stepNode.has("travelMode") ?
+                    stepNode.get("travelMode").asText() : "WALK";
+
+            if (!"TRANSIT".equalsIgnoreCase(stepTravelMode)) {
+                steps.add(setStepDetail(stepNode));
+            } else if (stepNode.has("transitDetails")) {
+                RouteResponse.StepDetail stepDetail = setStepDetail(stepNode);
+                RouteResponse.StepDetail.TransitDetails td = parseTransitDetails(stepNode.get("transitDetails"));
+                stepDetail.setTransitDetails(td);
+
+                if (isStepInKeptList(td, keptSteps)) {
+                    steps.add(stepDetail);
+                }
+            }
+        }
+
+        return steps;
+    }
+
+    /**
+     * Get transfer time from transit details
+     * Returns waitTimeSeconds directly from transit details if available
+     * Returns maximum value if information cannot be retrieved
+     *
+     * @param step Step detail object containing transit details
+     * @return long Transfer/wait time in seconds
+     */
+    private long getTransferTime(RouteResponse.StepDetail step) {
+        if (step.getTransitDetails() != null) {
+            return step.getTransitDetails().getWaitTimeSeconds();
+        }
+        return Long.MAX_VALUE;
+    }
+
+
+    /**
+     * Check if given transit step is in the kept list
+     * Matches by comparing departure stop locations
+     *
+     * @param td Transit details object
+     * @param keptSteps List of steps to keep
+     * @return boolean True if step is in kept list
+     */
+    private boolean isStepInKeptList(RouteResponse.StepDetail.TransitDetails td,
+                                     List<RouteResponse.StepDetail> keptSteps) {
+        return keptSteps.stream().anyMatch(kept ->
+                kept.getTransitDetails().getStopDetails().getDepartureStop().getLocation()
+                        .equals(td.getStopDetails().getDepartureStop().getLocation())
+        );
+    }
+
+    /**
+     * Process steps for normal cases (less than 5 transfers)
+     * Main processing:
+     * 1. Calculate walking duration
+     * 2. Handle waiting times
+     * 3. Process special cases (e.g., waiting time > 20 minutes)
+     *
+     * @param legNode JsonNode containing steps information
+     * @return List<RouteResponse.StepDetail> processed list of steps
+     */
+    private List<RouteResponse.StepDetail> processNormalSteps(JsonNode legNode) {
+        List<RouteResponse.StepDetail> steps = new ArrayList<>();
+        String previousTravelMode = "WALK";
+        long previousWalkDuration = 0;
+        Instant curStepArrivalTime = Instant.now();
+        Instant previousStepArrivalTime = Instant.now();
+        boolean needReplacement = false;
+
+        for (int i = 0; i < legNode.get("steps").size(); i++) {
+            JsonNode stepNode = legNode.get("steps").get(i);
+            RouteResponse.StepDetail stepDetail = setStepDetail(stepNode);
+            String stepTravelMode = stepNode.has("travelMode")
+                    ? stepNode.get("travelMode").asText()
+                    : "WALK";
+
+            if ("WALK".equalsIgnoreCase(previousTravelMode) &&
+                    "WALK".equalsIgnoreCase(stepTravelMode)) {
+                previousWalkDuration += stepDetail.getDuration();
+            }
+
+            if ("TRANSIT".equalsIgnoreCase(stepTravelMode)) {
+                if (stepNode.has("transitDetails") && !stepNode.get("transitDetails").isNull()) {
+                    JsonNode transitDetails = stepNode.get("transitDetails");
+
+                    //解析transitDetails
+                    RouteResponse.StepDetail.TransitDetails td = parseTransitDetails(transitDetails);
+                    stepDetail.setTransitDetails(td);
+                    if (td.getStopDetails() != null
+                            && td.getStopDetails().getArrivalTime() != null) {
+                        curStepArrivalTime = Instant.parse(td.getStopDetails().getArrivalTime());
+                        logger.info("departureTime: " + td.getStopDetails().getDepartureTime());
+                        logger.info("arrivalTime: " + td.getStopDetails().getArrivalTime());
+                    }
+                    if("WALK".equalsIgnoreCase(previousTravelMode)){
+                        // ② 同样计算"等待时间"：前一个 step 的结束时间 + 走到站的duration => 当前 Bus 的 arrivalTime
+                        if (td.getStopDetails() != null
+                                && td.getStopDetails().getArrivalTime() != null) {
+                            String departureTimeStr = td.getStopDetails().getDepartureTime();
+                            try {
+                                // 当前 step 的 departureTime
+                                Instant departureTime = Instant.parse(departureTimeStr);
+                                // 步行到这里的持续时间
+                                long walkDuration = previousWalkDuration;
+                                Instant walkToStationTime = previousStepArrivalTime
+                                        .plusSeconds(walkDuration);
+                                long waitTimeSeconds = Duration
+                                        .between(walkToStationTime, departureTime).getSeconds();
+                                // 设置等待时间
+                                td.setWaitTimeSeconds(waitTimeSeconds);
+                                //再次确保更新后的 transitDetails 被设置
+                                stepDetail.setTransitDetails(td);
+                                logger.info("walkToStationTime:"+walkToStationTime+"=previousStepArrivalTime:"+previousStepArrivalTime+"+walkDuration:"+walkDuration);
+                                logger.info("waitTimeSeconds:"+waitTimeSeconds+"=walkToStationTime:"+walkToStationTime+"-departureTime:"+departureTime);
+                                // 如果等待时间超过20min，就调用 changeStep 获取 driving 步骤
+                                if (waitTimeSeconds > 1200) {
+                                    // 获取当前 step 的起点和终点
+                                    String startLoc= td.getStopDetails().getDepartureStop().getLocation();
+                                    RouteResponse.StepDetail.TransitDetails.StopDetails.Stop startStop = td.getStopDetails().getDepartureStop();
+                                    RouteResponse.StepDetail.TransitDetails.StopDetails.Stop endStop = null;
+                                    String endLoc="";
+                                    logger.info("等待时间"+waitTimeSeconds+"超过20min，调用OTP API, 并切换本段step为Drive");
+                                    logger.info("i:"+i);
+                                    while("TRANSIT".equalsIgnoreCase(stepTravelMode) && i < legNode.get("steps").size()){
+                                        stepNode = legNode.get("steps").get(i);
+                                        stepDetail = setStepDetail(stepNode);
+                                        stepTravelMode=stepNode.has("travelMode")
+                                                ? stepNode.get("travelMode").asText()
+                                                : "WALK";
+                                        if (stepNode.has("transitDetails") && !stepNode.get("transitDetails").isNull()){
+                                            JsonNode curtransitDetails = stepNode.get("transitDetails");
+                                            RouteResponse.StepDetail.TransitDetails curtd = parseTransitDetails(curtransitDetails);
+                                            stepDetail.setTransitDetails(curtd);
+
+                                            if (curtd.getStopDetails() != null) {
+                                                endLoc = curtd.getStopDetails().getArrivalStop().getLocation();
+                                                endStop = curtd.getStopDetails().getArrivalStop();
+                                            }
+                                        }
+                                        System.out.println("i:"+"start:"+startLoc+"end"+endLoc);
+                                        i++;
+
+                                    }
+                                    logger.info("start: " + startLoc + " end: " + endLoc);
+                                    // 调用 changeStep 获取 driving 步骤
+                                    List<RouteResponse.StepDetail> changDetails = changeStep(startStop, endStop);
+                                    steps.addAll(changDetails);
+                                    needReplacement = true;
+                                }
+                            } catch (Exception e) {
+                                System.out.println(e);
+                            }
+                        }
+                    } else {
+                        stepDetail.setTransitDetails(td);
+                    }
+                }
+            }
+
+            previousStepArrivalTime = curStepArrivalTime;
+            previousTravelMode = stepTravelMode;
+            if (!needReplacement) {
+                steps.add(stepDetail);
+            }
+            needReplacement = false;
+        }
+
+        return steps;
+    }
+
+
     // 替换公交路径为OTP返回的驾驶路径
     public List<RouteResponse.StepDetail> changeStep(RouteResponse.StepDetail.TransitDetails.StopDetails.Stop startStop,
                                                      RouteResponse.StepDetail.TransitDetails.StopDetails.Stop endStop) throws Exception {
@@ -124,194 +469,25 @@ public class RouteServiceImpl implements RouteService {
 
 
     /**
-     * Retrieves routes based on the provided request.
+     * Calculate time difference between two time points
+     * Parses time strings to Instant objects and calculates difference
+     * Returns maximum value if parsing fails
      *
-     * @param request The route calculation request.
-     * @return The route response containing route details.
-     * @throws Exception if an error occurs during API calls.
+     * @param departureTime Departure time string
+     * @param arrivalTime Arrival time string
+     * @return long Time difference in seconds
      */
-    public RouteResponse getRoutes(RouteRequest request) throws Exception {
-        JsonNode computeRoutesResponse = getResponse(request);
-        if (computeRoutesResponse == null || !computeRoutesResponse.has("routes")) {
-            throw new Exception("Unable to retrieve routes from Google Routes API.");
+    private long calculateTransferTime(String departureTime, String arrivalTime) {
+        try {
+            Instant departure = Instant.parse(departureTime);
+            Instant arrival = Instant.parse(arrivalTime);
+            return Duration.between(departure, arrival).getSeconds();
+        } catch (Exception e) {
+            logger.warning("Error calculating transfer time: " + e.getMessage());
+            return Long.MAX_VALUE;
         }
-
-        List<RouteResponse.RouteDetail> routeDetails = new ArrayList<>();
-        for (JsonNode routeNode : computeRoutesResponse.get("routes")) {
-            String summary = routeNode.has("summary") && !routeNode.get("summary").isNull()
-                    ? routeNode.get("summary").asText() : "No Summary";
-            String distanceMeters = routeNode.has("distanceMeters") && !routeNode.get("distanceMeters").isNull()
-                    ? routeNode.get("distanceMeters").asText() : "Unknown";
-            String duration = routeNode.has("duration") && !routeNode.get("duration").isNull()
-                    ? routeNode.get("duration").asText() : "Unknown";
-            String polyline = "No Polyline";
-            // Extract polyline if available
-            if (routeNode.has("polyline") && !routeNode.get("polyline").isNull()
-                    && routeNode.get("polyline").has("encodedPolyline")
-                    && !routeNode.get("polyline").get("encodedPolyline").isNull()) {
-                polyline = routeNode.get("polyline").get("encodedPolyline").asText();
-            }
-            // Initialize RouteDetail object
-            RouteResponse.RouteDetail routeDetail = new RouteResponse.RouteDetail();
-            routeDetail.setSummary(summary);
-            routeDetail.setDistanceMeters(distanceMeters);
-            routeDetail.setDuration(duration);
-            routeDetail.setPolyline(polyline);
-
-            // 初始化 legs 容器
-            List<RouteResponse.LegDetail> legs = new ArrayList<>();
-
-            if (routeNode.has("legs") && !routeNode.get("legs").isNull()) {
-                for (JsonNode legNode : routeNode.get("legs")) {
-                    RouteResponse.LegDetail legDetail = new RouteResponse.LegDetail();
-                    // Extract start and end locations
-                    if (legNode.has("startLocation") && !legNode.get("startLocation").isNull()) {
-                        legDetail.setStartLocation(legNode.get("startLocation").toString());
-                    } else {
-                        legDetail.setStartLocation("Unknown Start Location");
-                    }
-                    if (legNode.has("endLocation") && !legNode.get("endLocation").isNull()) {
-                        legDetail.setEndLocation(legNode.get("endLocation").toString());
-                    } else {
-                        legDetail.setEndLocation("Unknown End Location");
-                    }
-                    // 如果 routeRequest 是 TRANSIT，就设置 travelMode=TRANSIT，否则按请求值
-                    if ("TRANSIT".equalsIgnoreCase(request.getTravelMode())) {
-                        legDetail.setTravelMode("TRANSIT");
-                    } else {
-                        legDetail.setTravelMode(request.getTravelMode());
-                    }
-
-                    // distance/duration
-                    legDetail.setDistance(
-                            legNode.has("distanceMeters") && !legNode.get("distanceMeters").isNull()
-                                    ? legNode.get("distanceMeters").asText()
-                                    : "Unknown Distance"
-                    );
-                    legDetail.setDuration(
-                            legNode.has("duration") && !legNode.get("duration").isNull()
-                                    ? legNode.get("duration").asText()
-                                    : "Unknown Duration"
-                    );
-
-                    // 这里同理拆分 steps
-                    List<RouteResponse.StepDetail> steps = new ArrayList<>();
-                    boolean needReplacement = false;
-
-                    String previousTravelMode="WALK";
-                    long previousWalkDuration = 0;
-                    Instant curStepArrivalTime = Instant.now();
-                    Instant previousStepArrivalTime = Instant.now();
-                    if (legNode.has("steps") && !legNode.get("steps").isNull()) {
-                        for (int i = 0; i < legNode.get("steps").size(); i++) {
-                            JsonNode stepNode = legNode.get("steps").get(i);
-                            RouteResponse.StepDetail stepDetail = setStepDetail(stepNode);
-                            String stepTravelMode=stepNode.has("travelMode")
-                                    ? stepNode.get("travelMode").asText()
-                                    : "WALK";
-                            logger.info("stepTravelMode"+stepTravelMode+";"+"getDuration"+stepDetail.getDuration());
-
-                            if("WALK".equalsIgnoreCase(previousTravelMode) && "WALK".equalsIgnoreCase(stepTravelMode)) {
-                                previousWalkDuration+=stepDetail.getDuration();
-                            }
-                            if ("TRANSIT".equalsIgnoreCase(stepTravelMode)) {
-                                if (stepNode.has("transitDetails") && !stepNode.get("transitDetails").isNull()) {
-                                    JsonNode transitDetails = stepNode.get("transitDetails");
-
-                                    //解析transitDetails
-                                    RouteResponse.StepDetail.TransitDetails td = parseTransitDetails(transitDetails);
-                                    stepDetail.setTransitDetails(td);
-                                    if (td.getStopDetails() != null
-                                            && td.getStopDetails().getArrivalTime() != null) {
-                                        curStepArrivalTime = Instant.parse(td.getStopDetails().getArrivalTime());
-                                        logger.info("departureTime: " + td.getStopDetails().getDepartureTime());
-                                        logger.info("arrivalTime: " + td.getStopDetails().getArrivalTime());
-                                    }
-                                    if("WALK".equalsIgnoreCase(previousTravelMode)){
-                                        // ② 同样计算"等待时间"：前一个 step 的结束时间 + 走到站的duration => 当前 Bus 的 arrivalTime
-                                        if (td.getStopDetails() != null
-                                                && td.getStopDetails().getArrivalTime() != null) {
-                                            String departureTimeStr = td.getStopDetails().getDepartureTime();
-                                            try {
-                                                // 当前 step 的 departureTime
-                                                Instant departureTime = Instant.parse(departureTimeStr);
-                                                // 步行到这里的持续时间
-                                                long walkDuration = previousWalkDuration;
-                                                Instant walkToStationTime = previousStepArrivalTime
-                                                        .plusSeconds(walkDuration);
-                                                long waitTimeSeconds = Duration
-                                                        .between(walkToStationTime, departureTime).getSeconds();
-                                                // 设置等待时间
-                                                td.setWaitTimeSeconds(waitTimeSeconds);
-                                                //再次确保更新后的 transitDetails 被设置
-                                                stepDetail.setTransitDetails(td);
-                                                logger.info("walkToStationTime:"+walkToStationTime+"=previousStepArrivalTime:"+previousStepArrivalTime+"+walkDuration:"+walkDuration);
-                                                logger.info("waitTimeSeconds:"+waitTimeSeconds+"=walkToStationTime:"+walkToStationTime+"-departureTime:"+departureTime);
-                                                // 如果等待时间超过20min，就调用 changeStep 获取 driving 步骤
-                                                if (waitTimeSeconds > 1800) {
-                                                    // 获取当前 step 的起点和终点
-                                                    String startLoc= td.getStopDetails().getDepartureStop().getLocation();
-                                                    RouteResponse.StepDetail.TransitDetails.StopDetails.Stop startStop = td.getStopDetails().getDepartureStop();
-                                                    RouteResponse.StepDetail.TransitDetails.StopDetails.Stop endStop = null;
-                                                    String endLoc="";
-                                                    logger.info("等待时间"+waitTimeSeconds+"超过20min，调用OTP API, 并切换本段step为Drive");
-                                                    logger.info("i:"+i);
-                                                    while("TRANSIT".equalsIgnoreCase(stepTravelMode) && i < legNode.get("steps").size()){
-                                                        stepNode = legNode.get("steps").get(i);
-                                                        stepDetail = setStepDetail(stepNode);
-                                                        stepTravelMode=stepNode.has("travelMode")
-                                                                ? stepNode.get("travelMode").asText()
-                                                                : "WALK";
-                                                        if (stepNode.has("transitDetails") && !stepNode.get("transitDetails").isNull()){
-                                                            JsonNode curtransitDetails = stepNode.get("transitDetails");
-                                                            RouteResponse.StepDetail.TransitDetails curtd = parseTransitDetails(curtransitDetails);
-                                                            stepDetail.setTransitDetails(curtd);
-
-                                                            if (curtd.getStopDetails() != null) {
-                                                                endLoc = curtd.getStopDetails().getArrivalStop().getLocation();
-                                                                endStop = curtd.getStopDetails().getArrivalStop();
-                                                            }
-                                                        }
-                                                        System.out.println("i:"+"start:"+startLoc+"end"+endLoc);
-                                                        i++;
-
-                                                    }
-                                                    logger.info("start: " + startLoc + " end: " + endLoc);
-                                                    // 调用 changeStep 获取 driving 步骤
-                                                    List<RouteResponse.StepDetail> changDetails = changeStep(startStop, endStop);
-                                                    steps.addAll(changDetails);
-                                                    needReplacement = true;
-                                                }
-                                            } catch (Exception e) {
-                                                System.out.println(e);
-                                            }
-                                        }
-                                    } else {
-                                        stepDetail.setTransitDetails(td);
-                                    }
-                                }
-                            }
-                            previousStepArrivalTime = curStepArrivalTime;
-                            previousTravelMode = stepTravelMode;
-                            if(needReplacement == false){
-                                steps.add(stepDetail);
-                                System.out.println("i:"+i+"stepdetails"+stepTravelMode);
-                            }
-                            needReplacement = false;
-                        }
-                    }
-                    legDetail.setSteps(steps);
-                    legs.add(legDetail);
-                }
-            }
-            routeDetail.setLegs(legs);
-            routeDetails.add(routeDetail);
-        }
-
-        RouteResponse response = new RouteResponse();
-        response.setRoutes(routeDetails);
-        return response;
     }
+
 
     @Override
     public List<RouteResponse.RouteDetail> sortRoutes(List<RouteResponse.RouteDetail> allRoutes, String sortType) {
@@ -516,5 +692,8 @@ public class RouteServiceImpl implements RouteService {
         }
 
         return payload;
+
+
+
     }
 }
