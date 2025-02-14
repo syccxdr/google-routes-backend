@@ -6,6 +6,7 @@ import com.example.google_backend.service.OTPService;
 import com.example.google_backend.service.RouteService;
 import com.example.google_backend.model.RouteRequestPayload;
 import com.example.google_backend.utils.TimingUtils;
+import com.example.google_backend.utils.route.CrossSeaRouteChecker;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.Resource;
@@ -35,6 +36,8 @@ public class RouteServiceImpl implements RouteService {
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Logger logger = Logger.getLogger(RouteServiceImpl.class.getName());
+
+    private static final long MAX_WAIT_TIME_SECONDS = 1200; // 20分钟
 
 
     public JsonNode getResponse(RouteRequest request) throws Exception {
@@ -108,7 +111,6 @@ public class RouteServiceImpl implements RouteService {
         return stepDetail;
 
     }
-
 
 
     /**
@@ -368,6 +370,9 @@ public class RouteServiceImpl implements RouteService {
                 if (stepNode.has("transitDetails") && !stepNode.get("transitDetails").isNull()) {
                     JsonNode transitDetails = stepNode.get("transitDetails");
 
+                    //检查该段是否为跨海路线,若为跨海路线则不替换
+                    boolean isCrossSea = CrossSeaRouteChecker.isCrossSeaRoute(transitDetails);
+
                     //解析transitDetails
                     RouteResponse.StepDetail.TransitDetails td = parseTransitDetails(transitDetails);
                     stepDetail.setTransitDetails(td);
@@ -397,8 +402,8 @@ public class RouteServiceImpl implements RouteService {
                                 stepDetail.setTransitDetails(td);
                                 logger.info("walkToStationTime:"+walkToStationTime+"=previousStepArrivalTime:"+previousStepArrivalTime+"+walkDuration:"+walkDuration);
                                 logger.info("waitTimeSeconds:"+waitTimeSeconds+"=walkToStationTime:"+walkToStationTime+"-departureTime:"+departureTime);
-                                // 如果等待时间超过20min，就调用 changeStep 获取 driving 步骤
-                                if (waitTimeSeconds > 1200) {
+                                // 如果等待时间超过20min并且不是跨海路线，就调用 changeStep 获取 driving 步骤
+                                if (waitTimeSeconds > MAX_WAIT_TIME_SECONDS  && !isCrossSea) {
                                     // 获取当前 step 的起点和终点
                                     String startLoc= td.getStopDetails().getDepartureStop().getLocation();
                                     RouteResponse.StepDetail.TransitDetails.StopDetails.Stop startStop = td.getStopDetails().getDepartureStop();
