@@ -229,7 +229,7 @@ public class RouteServiceImpl implements RouteService {
      * @param legNode JsonNode containing steps information
      * @return List<RouteResponse.StepDetail> processed list of steps
      */
-    private List<RouteResponse.StepDetail> processSteps(JsonNode legNode) {
+    private List<RouteResponse.StepDetail>  processSteps(JsonNode legNode) {
         List<RouteResponse.StepDetail> steps = new ArrayList<>();
         List<RouteResponse.StepDetail> transitSteps = new ArrayList<>();
         int transitCount = 0;
@@ -352,7 +352,6 @@ public class RouteServiceImpl implements RouteService {
         long previousWalkDuration = 0;
         Instant curStepArrivalTime = Instant.now();
         Instant previousStepArrivalTime = Instant.now();
-        boolean needReplacement = false;
 
         for (int i = 0; i < legNode.get("steps").size(); i++) {
             JsonNode stepNode = legNode.get("steps").get(i);
@@ -361,6 +360,7 @@ public class RouteServiceImpl implements RouteService {
                     ? stepNode.get("travelMode").asText()
                     : "WALK";
 
+            // 累计步行时间
             if ("WALK".equalsIgnoreCase(previousTravelMode) &&
                     "WALK".equalsIgnoreCase(stepTravelMode)) {
                 previousWalkDuration += stepDetail.getDuration();
@@ -369,90 +369,87 @@ public class RouteServiceImpl implements RouteService {
             if ("TRANSIT".equalsIgnoreCase(stepTravelMode)) {
                 if (stepNode.has("transitDetails") && !stepNode.get("transitDetails").isNull()) {
                     JsonNode transitDetails = stepNode.get("transitDetails");
+                    boolean isCrossSea = TimingUtils.measureExecutionTime("检查是否为跨海路线耗时",
+                            () -> CrossSeaRouteChecker.isCrossSeaRoute(transitDetails));
 
-                    //检查该段是否为跨海路线,若为跨海路线则不替换
-                    boolean isCrossSea = CrossSeaRouteChecker.isCrossSeaRoute(transitDetails);
-
-                    //解析transitDetails
                     RouteResponse.StepDetail.TransitDetails td = parseTransitDetails(transitDetails);
                     stepDetail.setTransitDetails(td);
-                    if (td.getStopDetails() != null
-                            && td.getStopDetails().getArrivalTime() != null) {
-                        curStepArrivalTime = Instant.parse(td.getStopDetails().getArrivalTime());
-                        logger.info("departureTime: " + td.getStopDetails().getDepartureTime());
-                        logger.info("arrivalTime: " + td.getStopDetails().getArrivalTime());
-                    }
-                    if("WALK".equalsIgnoreCase(previousTravelMode)){
-                        // ② 同样计算"等待时间"：前一个 step 的结束时间 + 走到站的duration => 当前 Bus 的 arrivalTime
-                        if (td.getStopDetails() != null
-                                && td.getStopDetails().getArrivalTime() != null) {
-                            String departureTimeStr = td.getStopDetails().getDepartureTime();
-                            try {
-                                // 当前 step 的 departureTime
-                                Instant departureTime = Instant.parse(departureTimeStr);
-                                // 步行到这里的持续时间
-                                long walkDuration = previousWalkDuration;
-                                Instant walkToStationTime = previousStepArrivalTime
-                                        .plusSeconds(walkDuration);
-                                long waitTimeSeconds = Duration
-                                        .between(walkToStationTime, departureTime).getSeconds();
-                                // 设置等待时间
-                                td.setWaitTimeSeconds(waitTimeSeconds);
-                                //再次确保更新后的 transitDetails 被设置
-                                stepDetail.setTransitDetails(td);
-                                logger.info("walkToStationTime:"+walkToStationTime+"=previousStepArrivalTime:"+previousStepArrivalTime+"+walkDuration:"+walkDuration);
-                                logger.info("waitTimeSeconds:"+waitTimeSeconds+"=walkToStationTime:"+walkToStationTime+"-departureTime:"+departureTime);
-                                // 如果等待时间超过20min并且不是跨海路线，就调用 changeStep 获取 driving 步骤
-                                if (waitTimeSeconds > MAX_WAIT_TIME_SECONDS  && !isCrossSea) {
-                                    // 获取当前 step 的起点和终点
-                                    String startLoc= td.getStopDetails().getDepartureStop().getLocation();
-                                    RouteResponse.StepDetail.TransitDetails.StopDetails.Stop startStop = td.getStopDetails().getDepartureStop();
-                                    RouteResponse.StepDetail.TransitDetails.StopDetails.Stop endStop = null;
-                                    String endLoc="";
-                                    logger.info("等待时间"+waitTimeSeconds+"超过20min，调用OTP API, 并切换本段step为Drive");
-                                    logger.info("i:"+i);
-                                    while("TRANSIT".equalsIgnoreCase(stepTravelMode) && i < legNode.get("steps").size()){
-                                        stepNode = legNode.get("steps").get(i);
-                                        stepDetail = setStepDetail(stepNode);
-                                        stepTravelMode=stepNode.has("travelMode")
-                                                ? stepNode.get("travelMode").asText()
-                                                : "WALK";
-                                        if (stepNode.has("transitDetails") && !stepNode.get("transitDetails").isNull()){
-                                            JsonNode curtransitDetails = stepNode.get("transitDetails");
-                                            RouteResponse.StepDetail.TransitDetails curtd = parseTransitDetails(curtransitDetails);
-                                            stepDetail.setTransitDetails(curtd);
 
-                                            if (curtd.getStopDetails() != null) {
-                                                endLoc = curtd.getStopDetails().getArrivalStop().getLocation();
-                                                endStop = curtd.getStopDetails().getArrivalStop();
+                    // 更新到达时间
+                    if (td.getStopDetails() != null && td.getStopDetails().getArrivalTime() != null) {
+                        curStepArrivalTime = Instant.parse(td.getStopDetails().getArrivalTime());
+                    }
+
+                    // 检查是否需要替换路段
+                    if ("WALK".equalsIgnoreCase(previousTravelMode) &&
+                            td.getStopDetails() != null &&
+                            td.getStopDetails().getDepartureTime() != null) {
+
+                        try {
+                            Instant departureTime = Instant.parse(td.getStopDetails().getDepartureTime());
+                            Instant walkToStationTime = previousStepArrivalTime.plusSeconds(previousWalkDuration);
+                            long waitTimeSeconds = Duration.between(walkToStationTime, departureTime).getSeconds();
+                            td.setWaitTimeSeconds(waitTimeSeconds);
+                            stepDetail.setTransitDetails(td);
+
+                            // 如果需要替换
+                            if (waitTimeSeconds > MAX_WAIT_TIME_SECONDS && !isCrossSea) {
+                                // 找到当前公交段的终点站
+                                int j = i;
+                                RouteResponse.StepDetail.TransitDetails.StopDetails.Stop startStop =
+                                        td.getStopDetails().getDepartureStop();
+                                RouteResponse.StepDetail.TransitDetails.StopDetails.Stop endStop = null;
+
+                                // 查找终点站（不修改原始的 i）
+                                while (j < legNode.get("steps").size()) {
+                                    JsonNode currentNode = legNode.get("steps").get(j);
+                                    String currentMode = currentNode.has("travelMode")
+                                            ? currentNode.get("travelMode").asText()
+                                            : "WALK";
+
+                                    if ("TRANSIT".equalsIgnoreCase(currentMode)) {
+                                        JsonNode currentTransitDetails = currentNode.get("transitDetails");
+                                        if (currentTransitDetails != null && !currentTransitDetails.isNull()) {
+                                            RouteResponse.StepDetail.TransitDetails currentTd =
+                                                    parseTransitDetails(currentTransitDetails);
+                                            if (currentTd.getStopDetails() != null) {
+                                                endStop = currentTd.getStopDetails().getArrivalStop();
                                             }
                                         }
-                                        System.out.println("i:"+"start:"+startLoc+"end"+endLoc);
-                                        i++;
-
+                                    } else {
+                                        break;
                                     }
-                                    logger.info("start: " + startLoc + " end: " + endLoc);
-                                    // 调用 changeStep 获取 driving 步骤
-                                    List<RouteResponse.StepDetail> changDetails = changeStep(startStop, endStop);
-                                    steps.addAll(changDetails);
-                                    needReplacement = true;
+                                    j++;
                                 }
-                            } catch (Exception e) {
-                                System.out.println(e);
+
+                                // 如果找到了完整的起终点，替换路段
+                                if (startStop != null && endStop != null) {
+                                    List<RouteResponse.StepDetail> replacementSteps =
+                                            changeStep(startStop, endStop);
+                                    if (!replacementSteps.isEmpty()) {
+                                        steps.addAll(replacementSteps);
+                                        // 跳过被替换的路段
+                                        i = j - 1;
+                                        continue;
+                                    }
+                                }
                             }
+                        } catch (Exception e) {
+                            logger.warning("处理等待时间时发生错误");
                         }
-                    } else {
-                        stepDetail.setTransitDetails(td);
                     }
                 }
             }
 
             previousStepArrivalTime = curStepArrivalTime;
             previousTravelMode = stepTravelMode;
-            if (!needReplacement) {
-                steps.add(stepDetail);
+            steps.add(stepDetail);
+
+            // 重置步行时间
+            if (!("WALK".equalsIgnoreCase(previousTravelMode) &&
+                    "WALK".equalsIgnoreCase(stepTravelMode))) {
+                previousWalkDuration = 0;
             }
-            needReplacement = false;
         }
 
         return steps;
