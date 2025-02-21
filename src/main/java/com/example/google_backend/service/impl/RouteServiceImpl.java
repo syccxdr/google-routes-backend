@@ -7,6 +7,7 @@ import com.example.google_backend.service.RouteService;
 import com.example.google_backend.model.RouteRequestPayload;
 import com.example.google_backend.utils.TimingUtils;
 import com.example.google_backend.utils.route.CrossSeaRouteChecker;
+import com.example.google_backend.utils.route.CongestionStationChecker;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.Resource;
@@ -372,6 +373,9 @@ public class RouteServiceImpl implements RouteService {
                     boolean isCrossSea = TimingUtils.measureExecutionTime("检查是否为跨海路线耗时",
                             () -> CrossSeaRouteChecker.isCrossSeaRoute(transitDetails));
 
+                    boolean isCongested = TimingUtils.measureExecutionTime("检查出发站点是否为拥堵站点耗时",
+                            () -> CongestionStationChecker.isCongested(transitDetails));
+
                     RouteResponse.StepDetail.TransitDetails td = parseTransitDetails(transitDetails);
                     stepDetail.setTransitDetails(td);
 
@@ -392,8 +396,9 @@ public class RouteServiceImpl implements RouteService {
                             td.setWaitTimeSeconds(waitTimeSeconds);
                             stepDetail.setTransitDetails(td);
 
-                            // 如果需要替换
-                            if (waitTimeSeconds > MAX_WAIT_TIME_SECONDS && !isCrossSea) {
+                            // 修改判断条件：当等待时间过长或站点拥堵时都考虑替换路段
+                            // 但跨海路线除外
+                            if ((waitTimeSeconds > MAX_WAIT_TIME_SECONDS || isCongested) && !isCrossSea) {
                                 // 找到当前公交段的终点站
                                 int j = i;
                                 RouteResponse.StepDetail.TransitDetails.StopDetails.Stop startStop =
@@ -422,7 +427,7 @@ public class RouteServiceImpl implements RouteService {
                                     j++;
                                 }
 
-                                // 如果找到了完整的起终点，替换路段
+                                // 如果找到了完整的起终点，进行替换路段操作
                                 if (startStop != null && endStop != null) {
                                     List<RouteResponse.StepDetail> replacementSteps =
                                             changeStep(startStop, endStop);
