@@ -8,6 +8,7 @@ import com.example.google_backend.model.RouteRequestPayload;
 import com.example.google_backend.utils.TimingUtils;
 import com.example.google_backend.utils.route.CrossSeaRouteChecker;
 import com.example.google_backend.utils.route.CongestionStationChecker;
+import com.example.google_backend.utils.route.TaxiHotSpotChecker;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.Resource;
@@ -17,6 +18,7 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -38,7 +40,8 @@ public class RouteServiceImpl implements RouteService {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Logger logger = Logger.getLogger(RouteServiceImpl.class.getName());
 
-    private static final long MAX_WAIT_TIME_SECONDS = 1200; // 20分钟
+    private static final long MAX_WAIT_TIME_SECONDS = 1200;
+
 
 
     public JsonNode getResponse(RouteRequest request) throws Exception {
@@ -376,6 +379,17 @@ public class RouteServiceImpl implements RouteService {
                     boolean isCongested = TimingUtils.measureExecutionTime("检查出发站点是否为拥堵站点耗时",
                             () -> CongestionStationChecker.isCongested(transitDetails));
 
+                    // 检查是否为打车热点
+                    boolean isTaxiHotspot = TimingUtils.measureExecutionTime("检查是否为打车热点耗时",
+                            () -> {
+                                try {
+                                    return TaxiHotSpotChecker.isHotspot(
+                                            transitDetails.get("departure_stop"));
+                                } catch (IOException e) {
+                                    throw new RuntimeException(e);
+                                }
+                            });
+
                     RouteResponse.StepDetail.TransitDetails td = parseTransitDetails(transitDetails);
                     stepDetail.setTransitDetails(td);
 
@@ -398,7 +412,7 @@ public class RouteServiceImpl implements RouteService {
 
                             // 修改判断条件：当等待时间过长或站点拥堵时都考虑替换路段
                             // 但跨海路线除外
-                            if ((waitTimeSeconds > MAX_WAIT_TIME_SECONDS || isCongested) && !isCrossSea) {
+                            if ((waitTimeSeconds > MAX_WAIT_TIME_SECONDS || isCongested || isTaxiHotspot) && !isCrossSea) {
                                 // 找到当前公交段的终点站
                                 int j = i;
                                 RouteResponse.StepDetail.TransitDetails.StopDetails.Stop startStop =
