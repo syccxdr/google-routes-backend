@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
+import org.springframework.stereotype.Component;
 
 import java.io.FileReader;
 import java.io.IOException;
@@ -23,6 +24,7 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 
+@Component
 public class CongestionStationChecker {
 
     private static final Map<String, Set<String>> timeLocationMap = new HashMap<>();
@@ -52,9 +54,9 @@ public class CongestionStationChecker {
                      .parse(reader)) {
 
             for (CSVRecord record : csvParser) {
-                String time = record.get(1).trim();
-                String location = record.get(2).trim();
-                double congestionValue = Double.parseDouble(record.get(3).trim());
+                String time = record.get(0).trim();
+                String location = record.get(1).trim();
+                double congestionValue = Double.parseDouble(record.get(2).trim());
 
                 // 使用Set存储站点名称
                 timeLocationMap.computeIfAbsent(time, k -> new HashSet<>())
