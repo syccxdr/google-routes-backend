@@ -1,15 +1,21 @@
 package com.example.google_backend.controller;
 
+import com.example.google_backend.common.redis.service.RedisService;
 import com.example.google_backend.model.RouteRequest;
 import com.example.google_backend.model.RouteResponse;
 import com.example.google_backend.service.RouteService;
+import com.example.google_backend.service.impl.RouteServiceImpl;
 import com.example.google_backend.utils.TimingUtils;
+import com.example.google_backend.utils.generator.CacheKeyGenerator;
+import jakarta.annotation.Resource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.logging.Logger;
 
 /**
  * Controller to handle route calculation requests.
@@ -18,8 +24,17 @@ import java.util.List;
 @RequestMapping("/api/routes")
 public class RouteController {
 
-    @Autowired
+    @Resource
     private RouteService routeService;
+
+    @Resource
+    private RedisService redisService;
+
+    //路线缓存过期时间 (minute)
+    private static final int ROUTE_CACHE_EXPIRE_TIME = 15;
+
+    private final Logger logger = Logger.getLogger(RouteController.class.getName());
+
 
     /**
      * Endpoint to calculate routes based on the provided request.
@@ -31,16 +46,29 @@ public class RouteController {
     public ResponseEntity<?> calculateRoutes(@RequestBody RouteRequest routeRequest) {
 
         try {
-            // 记录路线计算服务的耗时
-            RouteResponse response = TimingUtils.measureExecutionTime("路线计算服务耗时",
-                    () -> {
-                        try {
-                            return routeService.getRoutes(routeRequest);
-                        } catch (Exception e) {
-                            throw new RuntimeException(e);
-                        }
-                    });
-            return ResponseEntity.ok(response);
+            String cacheKey = CacheKeyGenerator.generateRouteKey(routeRequest);
+            // Step 1: Check if the route is already cached
+            if(redisService.hasKey(cacheKey)){
+                logger.info("路径缓存命中 - /calculate - 缓存键: " + cacheKey);
+                return ResponseEntity.ok(redisService.getCacheObject(cacheKey));
+            }else{
+                logger.info("路径缓存未命中 - /calculate - 缓存键: {}" + cacheKey);
+                // 缓存没查到，调Google API; 记录路线计算服务的耗时
+                RouteResponse response = TimingUtils.measureExecutionTime("路线计算服务耗时",
+                        () -> {
+                            try {
+                                return routeService.getRoutes(routeRequest);
+                            } catch (Exception e) {
+                                throw new RuntimeException(e);
+                            }
+                        });
+                // 缓存路线到redis
+                redisService.setCacheObject(cacheKey, response, (long) ROUTE_CACHE_EXPIRE_TIME, TimeUnit.MINUTES);
+                // 缓存保存日志
+                logger.info("路径已缓存 - 有效期: " + ROUTE_CACHE_EXPIRE_TIME + " 分钟 - 缓存键: " + cacheKey);;
+                return ResponseEntity.ok(response);
+
+            }
         } catch (Exception e) {
             // Log the error and return an appropriate response
             return ResponseEntity.status(500).body("Error calculating routes: " + e.getMessage());
@@ -52,9 +80,23 @@ public class RouteController {
             @RequestBody RouteRequest routeRequest,
             @RequestParam(value = "sort", defaultValue = "shortestDuration") String sortType) {
         try {
-            // Step 1: 获取所有路线
-            RouteResponse response = routeService.getRoutes(routeRequest);
-            List<RouteResponse.RouteDetail> allRoutes = response.getRoutes();
+            String cacheKey = CacheKeyGenerator.generateRouteKey(routeRequest);
+
+            List<RouteResponse.RouteDetail> allRoutes;
+
+            if(redisService.hasKey(cacheKey)){
+                logger.info("路径缓存命中 - /sorted - 缓存键: " + cacheKey + " - 排序方式: " + sortType);
+                RouteResponse cachedResponse = redisService.getCacheObject(cacheKey);
+                allRoutes = cachedResponse.getRoutes();
+            }else{
+                logger.info("路径缓存未命中 - /sorted - 缓存键: " + cacheKey) ;
+                RouteResponse response = routeService.getRoutes(routeRequest);
+                allRoutes = response.getRoutes();
+                // 缓存路线到redis
+                redisService.setCacheObject(cacheKey, response, (long) ROUTE_CACHE_EXPIRE_TIME, TimeUnit.MINUTES);
+                // 缓存保存日志
+                logger.info("路径已缓存 - 有效期: " + ROUTE_CACHE_EXPIRE_TIME + " 分钟 - 缓存键: " + cacheKey);
+            }
 
             // Step 2: 按指定方式排序
             List<RouteResponse.RouteDetail> sortedRoutes = TimingUtils.measureExecutionTime(

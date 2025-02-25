@@ -1,8 +1,12 @@
 package com.example.google_backend.model;
 
+import java.io.Serializable;
 import java.util.List;
 
-public class RouteRequest {
+public class RouteRequest implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+
     private Coordinates origin;
     private Coordinates destination;
     private String travelMode;

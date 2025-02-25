@@ -1,8 +1,12 @@
 package com.example.google_backend.model;
 
+import java.io.Serializable;
 import java.util.List;
 
-public class RouteResponse {
+public class RouteResponse implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+
     private List<RouteDetail> routes;
 
     // Getters and Setters
