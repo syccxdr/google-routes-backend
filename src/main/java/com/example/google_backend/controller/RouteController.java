@@ -3,6 +3,7 @@ package com.example.google_backend.controller;
 import com.example.google_backend.common.redis.service.RedisService;
 import com.example.google_backend.model.RouteRequest;
 import com.example.google_backend.model.RouteResponse;
+import com.example.google_backend.service.AsyncCacheService;
 import com.example.google_backend.service.RouteService;
 import com.example.google_backend.service.impl.RouteServiceImpl;
 import com.example.google_backend.utils.TimingUtils;
@@ -30,6 +31,9 @@ public class RouteController {
     @Resource
     private RedisService redisService;
 
+    @Resource
+    private AsyncCacheService asyncCacheService;
+
     //路线缓存过期时间 (minute)
     private static final int ROUTE_CACHE_EXPIRE_TIME = 15;
 
@@ -47,7 +51,7 @@ public class RouteController {
 
         try {
             String cacheKey = CacheKeyGenerator.generateRouteKey(routeRequest);
-            // Step 1: Check if the route is already cached
+            // Step 1: 检查缓存
             if(redisService.hasKey(cacheKey)){
                 logger.info("路径缓存命中 - /calculate - 缓存键: " + cacheKey);
                 return ResponseEntity.ok(redisService.getCacheObject(cacheKey));
@@ -62,8 +66,8 @@ public class RouteController {
                                 throw new RuntimeException(e);
                             }
                         });
-                // 缓存路线到redis
-                redisService.setCacheObject(cacheKey, response, (long) ROUTE_CACHE_EXPIRE_TIME, TimeUnit.MINUTES);
+                // 异步缓存路线到redis
+                asyncCacheService.cacheRouteAsync(cacheKey, response, ROUTE_CACHE_EXPIRE_TIME);
                 // 缓存保存日志
                 logger.info("路径已缓存 - 有效期: " + ROUTE_CACHE_EXPIRE_TIME + " 分钟 - 缓存键: " + cacheKey);;
                 return ResponseEntity.ok(response);
@@ -90,11 +94,11 @@ public class RouteController {
                 allRoutes = cachedResponse.getRoutes();
             }else{
                 logger.info("路径缓存未命中 - /sorted - 缓存键: " + cacheKey) ;
+                // 注意这里直接走service层方法，不再调用calculateRoutes方法
                 RouteResponse response = routeService.getRoutes(routeRequest);
                 allRoutes = response.getRoutes();
-                // 缓存路线到redis
-                redisService.setCacheObject(cacheKey, response, (long) ROUTE_CACHE_EXPIRE_TIME, TimeUnit.MINUTES);
-                // 缓存保存日志
+                // 异步缓存路线到redis
+                asyncCacheService.cacheRouteAsync(cacheKey, response, ROUTE_CACHE_EXPIRE_TIME);
                 logger.info("路径已缓存 - 有效期: " + ROUTE_CACHE_EXPIRE_TIME + " 分钟 - 缓存键: " + cacheKey);
             }
 
