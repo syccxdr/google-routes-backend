@@ -1,9 +1,11 @@
 package com.example.google_backend.utils.route;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.springframework.stereotype.Component;
 
 import java.util.Set;
 
+@Component
 public class CrossSeaRouteChecker {
     private static final Set<String> CROSS_SEA_MTR_LINES = Set.of(
             "Tsuen Wan Line",
