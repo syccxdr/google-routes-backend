@@ -7,6 +7,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.geo.Circle;
+import org.springframework.data.geo.Distance;
+import org.springframework.data.geo.GeoResults;
+import org.springframework.data.geo.Metrics;
+import org.springframework.data.geo.Point;
+import org.springframework.data.redis.connection.RedisGeoCommands;
 import org.springframework.data.redis.core.BoundSetOperations;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -261,5 +267,152 @@ public class RedisService {
     public Collection<String> keys(final String pattern)
     {
         return redisTemplate.keys(pattern);
+    }
+
+    // ========== Geospatial 相关操作 ==========
+
+    /**
+     * 添加地理位置信息
+     *
+     * @param key Redis键
+     * @param longitude 经度
+     * @param latitude 纬度
+     * @param member 成员名称
+     * @return 添加的数量
+     */
+    public Long geoAdd(String key, double longitude, double latitude, String member) {
+        Point point = new Point(longitude, latitude);
+        return redisTemplate.opsForGeo().add(key, point, member);
+    }
+
+    /**
+     * 批量添加地理位置信息
+     *
+     * @param key Redis键
+     * @param memberCoordinateMap 成员坐标映射
+     * @return 添加的数量
+     */
+    public Long geoAdd(String key, Map<String, Point> memberCoordinateMap) {
+        Map<Object, Point> map = (Map) memberCoordinateMap;
+        return redisTemplate.opsForGeo().add(key, map);
+    }
+
+    /**
+     * 获取地理位置信息
+     *
+     * @param key Redis键
+     * @param member 成员名称
+     * @return 坐标点
+     */
+    public Point geoPos(String key, String member) {
+        List<Point> list = redisTemplate.opsForGeo().position(key, member);
+        return (list != null && !list.isEmpty()) ? list.getFirst() : null;
+    }
+
+    /**
+     * 获取多个地理位置信息
+     *
+     * @param key Redis键
+     * @param members 成员名称集合
+     * @return 坐标点列表
+     */
+    public List<Point> geoPos(String key, String... members) {
+        return redisTemplate.opsForGeo().position(key, members);
+    }
+
+    /**
+     * 计算两点之间的距离
+     *
+     * @param key Redis键
+     * @param member1 成员1
+     * @param member2 成员2
+     * @param metric 距离单位
+     * @return 距离
+     */
+    public Distance geoDist(String key, String member1, String member2, Metrics metric) {
+        return redisTemplate.opsForGeo().distance(key, member1, member2, metric);
+    }
+
+
+    /**
+     * 获取指定范围内的地理位置
+     *
+     * @param key Redis键
+     * @param longitude 中心点经度
+     * @param latitude 中心点纬度
+     * @param radius 半径
+     * @param metric 距离单位
+     * @return 地理位置结果集
+     */
+    public GeoResults<RedisGeoCommands.GeoLocation<String>> geoRadius(
+            String key, double longitude, double latitude, double radius, Metrics metric) {
+
+        // 创建圆形区域
+        Point center = new Point(longitude, latitude);
+        Distance distance = new Distance(radius, metric);
+        Circle circle = new Circle(center, distance);
+
+        // 执行查询
+        return redisTemplate.opsForGeo().radius(key, circle);
+    }
+
+
+
+    /**
+     * 获取指定范围内的地理位置（带距离信息）
+     *
+     * @param key Redis键
+     * @param longitude 中心点经度
+     * @param latitude 中心点纬度
+     * @param radius 半径
+     * @param metric 距离单位
+     * @return 地理位置结果集
+     */
+    public GeoResults<RedisGeoCommands.GeoLocation<String>> geoRadiusWithDistance(
+            String key, double longitude, double latitude, double radius, Metrics metric) {
+
+        // 创建圆形区域
+        Point center = new Point(longitude, latitude);
+        Distance distance = new Distance(radius, metric);
+
+        // 设置查询参数
+        RedisGeoCommands.GeoRadiusCommandArgs args = RedisGeoCommands.GeoRadiusCommandArgs
+                .newGeoRadiusArgs()
+                .includeDistance();
+
+        // 执行查询
+        return redisTemplate.opsForGeo().radius(key, center, distance, args);
+    }
+
+
+    /**
+     * 获取指定成员附近的地理位置
+     *
+     * @param key Redis键
+     * @param member 成员名称
+     * @param radius 半径
+     * @param metric a距离单位
+     * @return 地理位置结果集
+     */
+    public GeoResults<RedisGeoCommands.GeoLocation<String>> geoRadiusByMember(
+            String key, String member, double radius, Metrics metric) {
+
+        // 设置距离
+        Distance distance = new Distance(radius, metric);
+
+        // 执行查询
+        return redisTemplate.opsForGeo().radius(key, member, distance);
+    }
+
+
+    /**
+     * 获取地理位置的GeoHash
+     *
+     * @param key Redis键
+     * @param members 成员名称集合
+     * @return GeoHash列表
+     */
+    public List<String> geoHash(String key, String... members) {
+        return redisTemplate.opsForGeo().hash(key, members);
     }
 }
