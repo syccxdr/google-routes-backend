@@ -8,6 +8,7 @@ import com.example.google_backend.model.RouteRequestPayload;
 import com.example.google_backend.utils.TimingUtils;
 import com.example.google_backend.utils.route.CrossSeaRouteChecker;
 import com.example.google_backend.utils.route.CongestionStationChecker;
+import com.example.google_backend.utils.route.LongDistanceExitChecker;
 import com.example.google_backend.utils.route.TaxiHotSpotChecker;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -35,6 +36,12 @@ public class RouteServiceImpl implements RouteService {
 
     @Resource
     private OTPService otpService;
+
+    @Resource
+    private TaxiHotSpotChecker taxiHotSpotChecker;
+
+    @Resource
+    private LongDistanceExitChecker longDistanceExitChecker;
 
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -383,12 +390,14 @@ public class RouteServiceImpl implements RouteService {
                     boolean isTaxiHotspot = TimingUtils.measureExecutionTime("检查是否为打车热点耗时",
                             () -> {
                                 try {
-                                    return TaxiHotSpotChecker.isHotspot(
+                                    return taxiHotSpotChecker.isHotspot(
                                             transitDetails.get("departure_stop"));
                                 } catch (IOException e) {
                                     throw new RuntimeException(e);
                                 }
                             });
+
+                    boolean isLongDistanceExit = false;
 
                     RouteResponse.StepDetail.TransitDetails td = parseTransitDetails(transitDetails);
                     stepDetail.setTransitDetails(td);
@@ -396,6 +405,13 @@ public class RouteServiceImpl implements RouteService {
                     // 更新到达时间
                     if (td.getStopDetails() != null && td.getStopDetails().getArrivalTime() != null) {
                         curStepArrivalTime = Instant.parse(td.getStopDetails().getArrivalTime());
+                    }
+                    // 判断公共交通是否为地铁
+                    String vehicleType = td.getTransitLine().getVehicle().getType();
+                    if("SUBWAY".equals(vehicleType)){
+                        // 如果是地铁，检查该进站口是否为长途
+                        isLongDistanceExit = TimingUtils.measureExecutionTime("检查是否为长途步行地铁站耗时",
+                            () -> longDistanceExitChecker.isLongDistanceExitStep(transitDetails));
                     }
 
                     // 检查是否需要替换路段
@@ -412,7 +428,8 @@ public class RouteServiceImpl implements RouteService {
 
                             // 修改判断条件：当等待时间过长或站点拥堵时都考虑替换路段
                             // 但跨海路线除外
-                            if ((waitTimeSeconds > MAX_WAIT_TIME_SECONDS || isCongested || isTaxiHotspot) && !isCrossSea) {
+                            if ((waitTimeSeconds > MAX_WAIT_TIME_SECONDS || isCongested || isTaxiHotspot || isLongDistanceExit)
+                                    && !isCrossSea) {
                                 // 找到当前公交段的终点站
                                 int j = i;
                                 RouteResponse.StepDetail.TransitDetails.StopDetails.Stop startStop =

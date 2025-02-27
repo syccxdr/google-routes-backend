@@ -384,6 +384,45 @@ public class RedisService {
         return redisTemplate.opsForGeo().radius(key, center, distance, args);
     }
 
+    /**
+     * 获取指定范围内的地理位置（带距离信息和限制数量）
+     *
+     * @param key Redis键
+     * @param longitude 中心点经度
+     * @param latitude 中心点纬度
+     * @param radius 半径（米）
+     * @param metrics 距离单位
+     * @param limit 返回结果数量限制
+     * @param isAsc 是否按距离升序排序
+     * @return 地理位置结果集
+     */
+    public GeoResults<RedisGeoCommands.GeoLocation<String>> geoRadiusWithDistanceAndLimit(
+            String key, double longitude, double latitude, double radius, Metrics metrics, long limit, boolean isAsc) {
+
+        // 创建圆形区域
+        Point center = new Point(longitude, latitude);
+        Distance distance = new Distance(radius, metrics);
+
+        // 设置查询参数
+        RedisGeoCommands.GeoRadiusCommandArgs args = RedisGeoCommands.GeoRadiusCommandArgs
+                .newGeoRadiusArgs()
+                .includeDistance();
+
+        // 设置排序和限制
+        if (isAsc) {
+            args.sortAscending();
+        } else {
+            args.sortDescending();
+        }
+
+        if (limit > 0) {
+            args.limit(limit);
+        }
+
+        // 执行查询
+        return redisTemplate.opsForGeo().radius(key, center, distance, args);
+    }
+
 
     /**
      * 获取指定成员附近的地理位置

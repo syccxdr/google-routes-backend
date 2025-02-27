@@ -92,7 +92,7 @@ public class TaxiHotSpotChecker {
                 System.currentTimeMillis() - startTime);
     }
 
-    public static boolean isHotspot(JsonNode transitDetails) throws IOException {
+    public boolean isHotspot(JsonNode transitDetails) throws IOException {
 
         if(transitDetails == null) return false;
 
