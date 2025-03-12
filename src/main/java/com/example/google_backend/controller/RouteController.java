@@ -41,7 +41,7 @@ public class RouteController {
 
 
     /**
-     * Endpoint to calculate routes based on the provided request.
+     * Endpoint to calculate routes based on the provided request. (formal)
      *
      * @param routeRequest The route calculation request containing origin, destination, travel mode, and transit modes.
      * @return A ResponseEntity containing the route response.
@@ -78,6 +78,48 @@ public class RouteController {
             return ResponseEntity.status(500).body("Error calculating routes: " + e.getMessage());
         }
     }
+
+    // 一个不用redis缓存的版本用于测试
+    @PostMapping("/calculate/without-cache")
+    public ResponseEntity<?> calculateRoutesWithoutCache(@RequestBody RouteRequest routeRequest) {
+        try {
+            // 记录路线计算服务的耗时
+            RouteResponse response = TimingUtils.measureExecutionTime("路线计算服务耗时",
+                    () -> {
+                        try {
+                            return routeService.getRoutes(routeRequest);
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
+                    });
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            // Log the error and return an appropriate response
+            return ResponseEntity.status(500).body("Error calculating routes: " + e.getMessage());
+        }
+    }
+
+    //一个不进行任何替换的路径规划接口
+    @PostMapping("/calculate/without-replace")
+    public ResponseEntity<?> calculateRoutesWithoutReplace(@RequestBody RouteRequest routeRequest) {
+        try {
+            // 记录路线计算服务的耗时
+            RouteResponse response = TimingUtils.measureExecutionTime("路线计算服务耗时",
+                    () -> {
+                        try {
+                            return routeService.getRoutesWithoutOptimization(routeRequest);
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
+                    });
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            // Log the error and return an appropriate response
+            return ResponseEntity.status(500).body("Error calculating routes: " + e.getMessage());
+        }
+    }
+
+
 
     @PostMapping("/sorted")
     public ResponseEntity<?> getSortedRoutes(

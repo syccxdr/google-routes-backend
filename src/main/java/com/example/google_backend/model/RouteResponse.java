@@ -2,12 +2,18 @@ package com.example.google_backend.model;
 
 import java.io.Serializable;
 import java.util.List;
+import java.util.Map;
 
 public class RouteResponse implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
     private List<RouteDetail> routes;
+
+    private Map<String,Long> timings;
+
+
+
 
     // Getters and Setters
 
@@ -17,6 +23,14 @@ public class RouteResponse implements Serializable {
 
     public void setRoutes(List<RouteDetail> routes) {
         this.routes = routes;
+    }
+
+    public Map<String, Long> getTimings() {
+        return timings;
+    }
+
+    public void setTimings(Map<String, Long> timings) {
+        this.timings = timings;
     }
 
     // 内部类表示单条路线的详细信息

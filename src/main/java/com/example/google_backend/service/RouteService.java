@@ -30,5 +30,8 @@ public interface RouteService {
      */
     RouteResponse getRoutes(RouteRequest request) throws Exception;
 
+    // Get routes without optimization
+    RouteResponse getRoutesWithoutOptimization(RouteRequest request) throws Exception;
+
     List<RouteResponse.RouteDetail> sortRoutes(List<RouteResponse.RouteDetail> allRoutes, String sortType);
 }

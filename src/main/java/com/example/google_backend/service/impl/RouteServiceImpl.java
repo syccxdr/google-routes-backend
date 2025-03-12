@@ -22,9 +22,7 @@ import org.springframework.web.client.RestTemplate;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
+import java.util.*;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
@@ -47,7 +45,7 @@ public class RouteServiceImpl implements RouteService {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Logger logger = Logger.getLogger(RouteServiceImpl.class.getName());
 
-    private static final long MAX_WAIT_TIME_SECONDS = 1200;
+    private static final long MAX_WAIT_TIME_SECONDS = 600;
 
 
 
@@ -136,12 +134,26 @@ public class RouteServiceImpl implements RouteService {
      * @throws Exception when unable to retrieve route information
      */
     public RouteResponse getRoutes(RouteRequest request) throws Exception {
+        // 创建用于存储各阶段耗时的Map
+        Map<String, Long> timings = new HashMap<>();
+
+        // 步骤1: 调用Google Routes API并测量时间
+        Instant getResponseStart = Instant.now();
         JsonNode computeRoutesResponse = getResponse(request);
+        Instant getResponseEnd = Instant.now();
+        long getResponseTime = Duration.between(getResponseStart, getResponseEnd).toMillis();
+        timings.put("getResponseTime", getResponseTime);
+
         if (computeRoutesResponse == null || !computeRoutesResponse.has("routes")) {
             throw new Exception("Unable to retrieve routes from Google Routes API.");
         }
 
+        // 步骤2: 解析响应并创建RouteResponse
+        Instant processStart = Instant.now();
+
         List<RouteResponse.RouteDetail> routeDetails = new ArrayList<>();
+        int totalSteps = 0; // 用于计算处理的总步骤数
+
         for (JsonNode routeNode : computeRoutesResponse.get("routes")) {
             RouteResponse.RouteDetail routeDetail = createRouteDetail(routeNode);
             List<RouteResponse.LegDetail> legs = new ArrayList<>();
@@ -149,9 +161,21 @@ public class RouteServiceImpl implements RouteService {
             if (routeNode.has("legs") && !routeNode.get("legs").isNull()) {
                 for (JsonNode legNode : routeNode.get("legs")) {
                     RouteResponse.LegDetail legDetail = createLegDetail(legNode, request);
+
+                    // 测量处理步骤的时间
+                    Instant processStepsStart = Instant.now();
                     if (legNode.has("steps") && !legNode.get("steps").isNull()) {
-                        legDetail.setSteps(processSteps(legNode));
+                        List<RouteResponse.StepDetail> steps = processSteps(legNode);
+                        legDetail.setSteps(steps);
+                        totalSteps += steps.size();
                     }
+                    Instant processStepsEnd = Instant.now();
+                    long processStepsTime = Duration.between(processStepsStart, processStepsEnd).toMillis();
+
+                    // 累加步骤处理时间（如果已存在，则累加）
+                    timings.put("processStepsTime",
+                            timings.getOrDefault("processStepsTime", 0L) + processStepsTime);
+
                     legs.add(legDetail);
                 }
             }
@@ -159,8 +183,123 @@ public class RouteServiceImpl implements RouteService {
             routeDetails.add(routeDetail);
         }
 
+        Instant processEnd = Instant.now();
+        long totalProcessingTime = Duration.between(processStart, processEnd).toMillis();
+        timings.put("totalProcessingTime", totalProcessingTime);
+
+        // 添加一些额外的元数据
+        timings.put("totalRoutes", (long) routeDetails.size());
+        timings.put("totalSteps", (long) totalSteps);
+
+        // 计算总体耗时
+        timings.put("totalTime", getResponseTime + totalProcessingTime);
+
+        // 创建响应并设置耗时信息
         RouteResponse response = new RouteResponse();
         response.setRoutes(routeDetails);
+        response.setTimings(timings);
+
+        return response;
+    }
+
+    /**
+     * Process route request and return route response without optimization
+     * Main responsibilities:
+     * 1. Call Google Routes API to get routing information
+     * 2. Parse response and build RouteResponse object
+     * 3. Process detailed route information without any optimization
+     *
+     * @param request RouteRequest object containing origin, destination etc.
+     * @return RouteResponse object containing complete routing information
+     * @throws Exception when unable to retrieve route information
+     */
+    public RouteResponse getRoutesWithoutOptimization(RouteRequest request) throws Exception {
+        // 创建用于存储各阶段耗时的Map
+        Map<String, Long> timings = new HashMap<>();
+
+        // 步骤1: 调用Google Routes API并测量时间
+        Instant getResponseStart = Instant.now();
+        JsonNode computeRoutesResponse = getResponse(request);
+        Instant getResponseEnd = Instant.now();
+        long getResponseTime = Duration.between(getResponseStart, getResponseEnd).toMillis();
+        timings.put("getResponseTime", getResponseTime);
+
+        if (computeRoutesResponse == null || !computeRoutesResponse.has("routes")) {
+            throw new Exception("Unable to retrieve routes from Google Routes API.");
+        }
+
+        // 步骤2: 解析响应并创建RouteResponse，不进行任何优化
+        Instant processStart = Instant.now();
+
+        List<RouteResponse.RouteDetail> routeDetails = new ArrayList<>();
+        int totalSteps = 0; // 用于计算处理的总步骤数
+
+        for (JsonNode routeNode : computeRoutesResponse.get("routes")) {
+            RouteResponse.RouteDetail routeDetail = createRouteDetail(routeNode);
+            List<RouteResponse.LegDetail> legs = new ArrayList<>();
+
+            if (routeNode.has("legs") && !routeNode.get("legs").isNull()) {
+                for (JsonNode legNode : routeNode.get("legs")) {
+                    RouteResponse.LegDetail legDetail = createLegDetail(legNode, request);
+
+                    // 直接处理步骤，不进行任何替换或优化
+                    Instant processStepsStart = Instant.now();
+                    List<RouteResponse.StepDetail> steps = new ArrayList<>();
+
+                    if (legNode.has("steps") && !legNode.get("steps").isNull()) {
+                        // 处理所有步骤
+                        for (JsonNode stepNode : legNode.get("steps")) {
+                            RouteResponse.StepDetail stepDetail = setStepDetail(stepNode);
+
+                            // 如果是公交步骤，处理公交详情
+                            if (stepNode.has("travelMode") &&
+                                    "TRANSIT".equalsIgnoreCase(stepNode.get("travelMode").asText()) &&
+                                    stepNode.has("transitDetails") &&
+                                    !stepNode.get("transitDetails").isNull()) {
+
+                                stepDetail.setTransitDetails(parseTransitDetails(stepNode.get("transitDetails")));
+                            }
+
+                            // 添加到步骤列表
+                            steps.add(stepDetail);
+                        }
+
+                        // 设置步骤列表到leg
+                        legDetail.setSteps(steps);
+                        totalSteps += steps.size();
+                    }
+
+                    Instant processStepsEnd = Instant.now();
+                    long processStepsTime = Duration.between(processStepsStart, processStepsEnd).toMillis();
+
+                    // 累加步骤处理时间
+                    timings.put("processStepsTime",
+                            timings.getOrDefault("processStepsTime", 0L) + processStepsTime);
+
+                    // 添加到leg列表
+                    legs.add(legDetail);
+                }
+            }
+
+            // 设置legs到route
+            routeDetail.setLegs(legs);
+            routeDetails.add(routeDetail);
+        }
+
+        Instant processEnd = Instant.now();
+        long totalProcessingTime = Duration.between(processStart, processEnd).toMillis();
+        timings.put("totalProcessingTime", totalProcessingTime);
+
+        // 添加元数据
+        timings.put("totalRoutes", (long) routeDetails.size());
+        timings.put("totalSteps", (long) totalSteps);
+        timings.put("totalTime", getResponseTime + totalProcessingTime);
+
+        // 创建响应并设置耗时信息
+        RouteResponse response = new RouteResponse();
+        response.setRoutes(routeDetails);
+        response.setTimings(timings);
+
         return response;
     }
 
@@ -196,6 +335,7 @@ public class RouteServiceImpl implements RouteService {
         routeDetail.setDuration(duration);
         routeDetail.setPolyline(polyline);
         return routeDetail;
+
     }
 
     /**
